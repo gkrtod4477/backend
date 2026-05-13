@@ -169,6 +169,9 @@ Ref: turn_snapshots.turn_id > turns.id
 Ref: executions.game_room_id > game_rooms.id
 Ref: executions.turn_id > turns.id
 Ref: mission_results.mission_id > game_room_missions.id
+Ref: mission_results.turn_id > turns.id
+Ref: mission_results.game_room_id > game_rooms.id
+
 
 
 Table ai_game_sessions {
