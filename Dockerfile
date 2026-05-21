@@ -1,0 +1,30 @@
+FROM node:23-alpine AS base
+WORKDIR /app
+
+RUN npm install -g pnpm
+
+# ---- deps stage ----
+FROM base AS deps
+COPY package.json pnpm-lock.yaml* pnpm-workspace.yaml* ./
+RUN pnpm install --frozen-lockfile
+
+# ---- build stage ----
+FROM deps AS build
+COPY . .
+RUN pnpm build
+
+# ---- production stage ----
+FROM node:23-alpine AS production
+WORKDIR /app
+
+RUN npm install -g pnpm
+
+COPY package.json pnpm-lock.yaml* pnpm-workspace.yaml* ./
+RUN pnpm install --frozen-lockfile --prod
+
+COPY --from=build /app/dist ./dist
+
+ENV NODE_ENV=production
+EXPOSE 3000
+
+CMD ["node", "dist/main"]

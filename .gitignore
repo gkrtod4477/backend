@@ -3,3 +3,23 @@
 
 # Cursor files
 .cursor/
+
+# Node
+node_modules/
+dist/
+coverage/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Build
+*.js.map
+*.d.ts.map
+tsconfig*.tsbuildinfo
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
