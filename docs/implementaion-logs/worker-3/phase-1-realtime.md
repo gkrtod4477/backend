@@ -134,7 +134,7 @@
 - [x] `corepack pnpm test -- realtime.gateway.spec.ts` — 권한 상승 후 실행, 8개 테스트 통과 (`code-change` fan-out/unauthorized rejection 포함)
 - [x] GPT-5.4 review subagent 1차 finding 반영 완료 — stale turn scope, client timestamp echo, code-change 예외 누락 지적을 수정함
 - [ ] `corepack pnpm test -- realtime.gateway.spec.ts` 최종 재실행 — join-time current-turn cache seed 테스트 추가 직후 포트 바인딩 권한 재승인 한도에 걸려 미실행
-- [ ] GPT-5.4 follow-up re-review — 사용 한도 초과로 추가 subagent 실행 불가
+- [x] GPT-5.4 follow-up re-review — multi-socket disconnect false `LEFT` risk 발견 후 `realtime.gateway.ts`에 user-level socket 집계를 추가해 수정했고, `realtime.gateway.unit.spec.ts`로 회귀를 고정한 뒤 `corepack pnpm test -- realtime.gateway.spec.ts`를 권한 상승 재실행하여 9개 테스트 통과 확인
 
 **Commit:**
 - `5b1ecf5` feat(realtime): 코드 동기화 상태 캐시 추가
