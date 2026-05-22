@@ -4,6 +4,8 @@ export class InitialAuthAndAiChat1747843200000 implements MigrationInterface {
   name = 'InitialAuthAndAiChat1747843200000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
+    await queryRunner.query(`CREATE EXTENSION IF NOT EXISTS pgcrypto`);
+
     await queryRunner.query(`
       CREATE TABLE "users" (
         "id" uuid NOT NULL DEFAULT gen_random_uuid(),

@@ -1,6 +1,6 @@
 import { HttpException, HttpStatus } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, IsNull, Repository } from 'typeorm';
 import { JwtTokenService } from '../../integrations/jwt/jwt-token.service';
 import { AiChatSession } from '../ai-chat-sessions/entity/ai-chat-session.entity';
 import { AUTH_ERROR } from './constants/auth-error.constants';
@@ -217,56 +217,98 @@ describe('AuthService', () => {
   });
 
   describe('refreshToken', () => {
+    const stored = {
+      id: 'token-row-1',
+      userId: 'user-1',
+      tokenHash: 'hashed-refresh-token',
+      expiresAt: new Date('2030-01-01T00:00:00Z'),
+      revokedAt: null,
+      user: {
+        id: 'user-1',
+        loginId: 'user123',
+      } as User,
+    } as RefreshToken;
+
+    const setupRefreshTransaction = (refreshRepo: {
+      findOne: jest.Mock;
+      update: jest.Mock;
+      create: jest.Mock;
+      save: jest.Mock;
+    }) => {
+      (dataSource.transaction as jest.Mock).mockImplementation(
+        async (callback: (manager: { getRepository: (entity: unknown) => unknown }) => unknown) => {
+          const manager = {
+            getRepository: (entity: unknown) => {
+              if (entity === RefreshToken) {
+                return refreshRepo;
+              }
+              return { findOneBy: jest.fn() };
+            },
+          };
+          return callback(manager);
+        },
+      );
+    };
+
     it('revokes the previous refresh token and issues a new pair', async () => {
-      const stored = {
-        id: 'token-row-1',
-        userId: 'user-1',
-        tokenHash: 'hashed-refresh-token',
-        expiresAt: new Date('2030-01-01T00:00:00Z'),
-        revokedAt: null,
-        user: {
-          id: 'user-1',
-          loginId: 'user123',
-        } as User,
-      } as RefreshToken;
-
-      refreshTokenRepository.findOne.mockResolvedValue(stored);
-
       const refreshRepo = {
-        update: jest.fn().mockResolvedValue(undefined),
+        findOne: jest.fn().mockResolvedValue(stored),
+        update: jest.fn().mockResolvedValue({ affected: 1 }),
         create: jest.fn().mockImplementation((value) => value),
         save: jest.fn().mockResolvedValue({}),
       };
 
-      (dataSource.transaction as jest.Mock).mockImplementation(
-        async (callback: (manager: { getRepository: () => typeof refreshRepo }) => unknown) => {
-          const manager = { getRepository: () => refreshRepo };
-          return callback(manager);
-        },
-      );
-
+      setupRefreshTransaction(refreshRepo);
       jwtTokenService.generateRefreshToken.mockReturnValue('new-refresh-token');
 
       const result = await service.refreshToken('presented-refresh-token');
 
-      expect(refreshRepo.update).toHaveBeenCalledWith('token-row-1', {
-        revokedAt: expect.any(Date),
+      expect(refreshRepo.findOne).toHaveBeenCalledWith({
+        where: { tokenHash: 'hashed-refresh-token' },
+        relations: ['user'],
       });
+      expect(refreshRepo.update).toHaveBeenCalledWith(
+        { id: 'token-row-1', revokedAt: IsNull() },
+        { revokedAt: expect.any(Date) },
+      );
       expect(refreshRepo.save).toHaveBeenCalled();
       expect(result.accessToken).toBe('access-token');
       expect(result.refreshToken).toBe('new-refresh-token');
     });
 
-    it('rejects revoked refresh tokens', async () => {
-      refreshTokenRepository.findOne.mockResolvedValue({
-        id: 'token-row-1',
-        revokedAt: new Date(),
-        expiresAt: new Date('2030-01-01T00:00:00Z'),
-      } as RefreshToken);
+    it('rejects refresh when revoke update affects zero rows (concurrent reuse)', async () => {
+      const refreshRepo = {
+        findOne: jest.fn().mockResolvedValue(stored),
+        update: jest.fn().mockResolvedValue({ affected: 0 }),
+        create: jest.fn(),
+        save: jest.fn(),
+      };
+
+      setupRefreshTransaction(refreshRepo);
+
+      await expect(service.refreshToken('presented-refresh-token')).rejects.toMatchObject({
+        response: { code: AUTH_ERROR.REFRESH_TOKEN_REVOKED },
+      });
+      expect(refreshRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('rejects already revoked refresh tokens', async () => {
+      const refreshRepo = {
+        findOne: jest.fn().mockResolvedValue({
+          ...stored,
+          revokedAt: new Date(),
+        }),
+        update: jest.fn(),
+        create: jest.fn(),
+        save: jest.fn(),
+      };
+
+      setupRefreshTransaction(refreshRepo);
 
       await expect(service.refreshToken('revoked')).rejects.toMatchObject({
         response: { code: AUTH_ERROR.REFRESH_TOKEN_REVOKED },
       });
+      expect(refreshRepo.update).not.toHaveBeenCalled();
     });
   });
 });

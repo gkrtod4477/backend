@@ -1,7 +1,7 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, QueryFailedError, Repository } from 'typeorm';
+import { DataSource, IsNull, QueryFailedError, Repository } from 'typeorm';
 import { toSeoulIso } from '../../common/utils/date.util';
 import { JwtTokenService } from '../../integrations/jwt/jwt-token.service';
 import { AiChatSession } from '../ai-chat-sessions/entity/ai-chat-session.entity';
@@ -160,39 +160,54 @@ export class AuthService {
 
   async refreshToken(refreshToken: string): Promise<RefreshTokenResult> {
     const tokenHash = this.jwtTokenService.hashRefreshToken(refreshToken);
-    const stored = await this.refreshTokenRepository.findOne({
-      where: { tokenHash },
-      relations: ['user'],
-    });
-
-    if (!stored || stored.revokedAt !== null) {
-      throwAuthError(
-        AUTH_ERROR.REFRESH_TOKEN_REVOKED,
-        'Refresh token has been revoked',
-        HttpStatus.UNAUTHORIZED,
-      );
-    }
-
-    if (stored.expiresAt.getTime() <= Date.now()) {
-      throwAuthError(
-        AUTH_ERROR.TOKEN_INVALID,
-        'Refresh token has expired',
-        HttpStatus.UNAUTHORIZED,
-      );
-    }
-
-    const user = stored.user ?? (await this.userRepository.findOneBy({ id: stored.userId }));
-    if (!user) {
-      throwAuthError(
-        AUTH_ERROR.TOKEN_INVALID,
-        'Refresh token is invalid',
-        HttpStatus.UNAUTHORIZED,
-      );
-    }
 
     return this.dataSource.transaction(async (manager) => {
       const refreshRepo = manager.getRepository(RefreshToken);
-      await refreshRepo.update(stored.id, { revokedAt: new Date() });
+      const userRepo = manager.getRepository(User);
+
+      const stored = await refreshRepo.findOne({
+        where: { tokenHash },
+        relations: ['user'],
+      });
+
+      if (!stored || stored.revokedAt !== null) {
+        throwAuthError(
+          AUTH_ERROR.REFRESH_TOKEN_REVOKED,
+          'Refresh token has been revoked',
+          HttpStatus.UNAUTHORIZED,
+        );
+      }
+
+      if (stored.expiresAt.getTime() <= Date.now()) {
+        throwAuthError(
+          AUTH_ERROR.TOKEN_INVALID,
+          'Refresh token has expired',
+          HttpStatus.UNAUTHORIZED,
+        );
+      }
+
+      const user = stored.user ?? (await userRepo.findOneBy({ id: stored.userId }));
+      if (!user) {
+        throwAuthError(
+          AUTH_ERROR.TOKEN_INVALID,
+          'Refresh token is invalid',
+          HttpStatus.UNAUTHORIZED,
+        );
+      }
+
+      const revokeResult = await refreshRepo.update(
+        { id: stored.id, revokedAt: IsNull() },
+        { revokedAt: new Date() },
+      );
+
+      if (!revokeResult.affected) {
+        throwAuthError(
+          AUTH_ERROR.REFRESH_TOKEN_REVOKED,
+          'Refresh token has been revoked',
+          HttpStatus.UNAUTHORIZED,
+        );
+      }
+
       const tokens = await this.persistRefreshToken(user, refreshRepo);
       return {
         accessToken: tokens.accessToken,
