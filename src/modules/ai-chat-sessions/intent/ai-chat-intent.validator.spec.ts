@@ -1,5 +1,6 @@
 import { AiChatRequestType } from '../../../shared/enums/ai-chat.enum';
 import { AI_CHAT_ERROR } from '../constants/ai-chat-error.constants';
+import { DEFAULT_CLARIFICATION_MESSAGE } from './ai-chat-assistant-content';
 import { AiChatIntentValidator } from './ai-chat-intent.validator';
 
 describe('AiChatIntentValidator', () => {
@@ -73,7 +74,7 @@ describe('AiChatIntentValidator', () => {
     expect(result.outcome).toBe('clarification');
   });
 
-  it('returns clarification when requestType is null', () => {
+  it('returns clarification when requestType is null with safe assistantHint', () => {
     const result = validator.validate({
       requestType: null,
       assistantHint: '무엇을 도와드릴까요?',
@@ -82,6 +83,18 @@ describe('AiChatIntentValidator', () => {
     expect(result).toEqual({
       outcome: 'clarification',
       content: '무엇을 도와드릴까요?',
+    });
+  });
+
+  it('replaces unsafe assistantHint with default clarification when requestType is null', () => {
+    const result = validator.validate({
+      requestType: null,
+      assistantHint: 'Bearer sk-secret1234567890 leaked',
+    });
+
+    expect(result).toEqual({
+      outcome: 'clarification',
+      content: DEFAULT_CLARIFICATION_MESSAGE,
     });
   });
 

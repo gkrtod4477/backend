@@ -4,6 +4,10 @@ import { DataSource, FindOptionsWhere, Repository } from 'typeorm';
 import type { AuthenticatedUser } from '../../common/types/authenticated-user.type';
 import { toSeoulIso } from '../../common/utils/date.util';
 import {
+  LLM_FOLLOW_UP_GENERATOR,
+  type LlmFollowUpGeneratorPort,
+} from '../../integrations/llm/llm-follow-up.port';
+import {
   LLM_INTENT_PARSER,
   type LlmIntentParserPort,
   type LlmIntentRawResponse,
@@ -26,7 +30,7 @@ import { ListAiChatSessionsQueryDto } from './dto/list-ai-chat-sessions-query.dt
 import { AiChatMessage } from './entity/ai-chat-message.entity';
 import { AiChatRequest } from './entity/ai-chat-request.entity';
 import { AiChatSession } from './entity/ai-chat-session.entity';
-import { buildCommandAssistantContent } from './intent/ai-chat-assistant-content';
+import { buildSafeStaticFollowUpContent } from './intent/ai-chat-assistant-content';
 import { AiChatCommandResultMapper } from './intent/ai-chat-command-result.mapper';
 import {
   AiChatIntentValidator,
@@ -81,6 +85,8 @@ export class AiChatSessionsService {
     private readonly dataSource: DataSource,
     @Inject(LLM_INTENT_PARSER)
     private readonly llmIntentParser: LlmIntentParserPort,
+    @Inject(LLM_FOLLOW_UP_GENERATOR)
+    private readonly llmFollowUpGenerator: LlmFollowUpGeneratorPort,
   ) {}
 
   async listSessions(
@@ -182,7 +188,12 @@ export class AiChatSessionsService {
       }
 
       const { command, assistantHint } = validation;
-      const assistant = buildCommandAssistantContent(command, assistantHint);
+      const followUp = await this.resolveCommandFollowUp(
+        command,
+        dto.message,
+        assistantHint,
+        session.gameRoomId,
+      );
       const commandResult = this.commandResultMapper.toPendingResult(command);
 
       savedRequest.requestType = command.requestType;
@@ -194,6 +205,10 @@ export class AiChatSessionsService {
       savedRequest.responsePayload = {
         extractedCommand: command,
         commandResult,
+        followUp: {
+          source: followUp.followUpSource,
+          templateKey: followUp.templateKey,
+        },
       };
       savedRequest.status = AiChatRequestStatus.COMPLETED;
       savedRequest.respondedAt = now;
@@ -205,8 +220,8 @@ export class AiChatSessionsService {
         senderType: AiChatMessageSenderType.ASSISTANT,
         senderUserId: null,
         messageType: AiChatMessageType.COMMAND_RESULT,
-        content: assistant.content,
-        metadataJson: assistant.metadata,
+        content: followUp.content,
+        metadataJson: followUp.metadata,
       });
       const savedAssistantMessage = await messageRepo.save(assistantMessage);
 
@@ -329,6 +344,34 @@ export class AiChatSessionsService {
       assistantMessage: this.toMessageItem(savedAssistantMessage),
       commandResult,
     };
+  }
+
+  private async resolveCommandFollowUp(
+    command: Parameters<LlmFollowUpGeneratorPort['generateCommandFollowUp']>[0]['command'],
+    userMessage: string,
+    assistantHint: string | undefined,
+    gameRoomId: string | null,
+  ) {
+    try {
+      return await this.llmFollowUpGenerator.generateCommandFollowUp({
+        command,
+        userMessage,
+        assistantHint,
+        gameRoomId,
+      });
+    } catch {
+      const staticFallback = buildSafeStaticFollowUpContent(command);
+      return {
+        content: staticFallback.content,
+        metadata: {
+          ...staticFallback.metadata,
+          followUpSource: 'static_fallback' as const,
+          templateKey: null,
+        },
+        followUpSource: 'static_fallback' as const,
+        templateKey: null,
+      };
+    }
   }
 
   private async requireOwnedSession(

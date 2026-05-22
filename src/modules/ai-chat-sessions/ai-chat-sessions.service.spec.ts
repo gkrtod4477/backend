@@ -7,7 +7,9 @@ import {
   AiChatRequestType,
 } from '../../shared/enums/ai-chat.enum';
 import { AiChatCommandResultStatus } from '../../shared/dto/ai-chat-command.dto';
+import type { LlmFollowUpGeneratorPort } from '../../integrations/llm/llm-follow-up.port';
 import type { LlmIntentParserPort } from '../../integrations/llm/llm-intent-parser.port';
+import { DEFAULT_CLARIFICATION_MESSAGE } from './intent/ai-chat-assistant-content';
 import { AI_CHAT_ERROR } from './constants/ai-chat-error.constants';
 import { AiChatSessionsService } from './ai-chat-sessions.service';
 import { AiChatMessage } from './entity/ai-chat-message.entity';
@@ -23,6 +25,7 @@ describe('AiChatSessionsService', () => {
   let aiChatRequestRepository: jest.Mocked<Repository<AiChatRequest>>;
   let dataSource: jest.Mocked<DataSource>;
   let llmIntentParser: jest.Mocked<LlmIntentParserPort>;
+  let llmFollowUpGenerator: jest.Mocked<LlmFollowUpGeneratorPort>;
   let service: AiChatSessionsService;
 
   beforeEach(() => {
@@ -45,12 +48,22 @@ describe('AiChatSessionsService', () => {
       parseUserMessage: jest.fn(),
     };
 
+    llmFollowUpGenerator = {
+      generateCommandFollowUp: jest.fn().mockResolvedValue({
+        content: 'EASY 난이도로 방을 만들 준비가 됐어요. 미션을 선택해 주세요.',
+        metadata: { difficulty: 'EASY', followUpSource: 'static_fallback', templateKey: null },
+        followUpSource: 'static_fallback',
+        templateKey: null,
+      }),
+    };
+
     service = new AiChatSessionsService(
       aiChatSessionRepository,
       aiChatMessageRepository,
       aiChatRequestRepository,
       dataSource,
       llmIntentParser,
+      llmFollowUpGenerator,
     );
   });
 
@@ -197,6 +210,19 @@ describe('AiChatSessionsService', () => {
         }),
       );
       expect(messageRepo.save).toHaveBeenCalledTimes(2);
+      expect(llmFollowUpGenerator.generateCommandFollowUp).toHaveBeenCalledWith(
+        expect.objectContaining({
+          command: expect.objectContaining({ requestType: AiChatRequestType.ROOM_CREATE }),
+          userMessage: '쉬운 난이도로 방 만들어줘',
+        }),
+      );
+      expect(requestRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          responsePayload: expect.objectContaining({
+            followUp: expect.objectContaining({ source: 'static_fallback' }),
+          }),
+        }),
+      );
       expect(result).toMatchObject({
         requestType: AiChatRequestType.ROOM_CREATE,
         requestStatus: AiChatRequestStatus.COMPLETED,
@@ -207,10 +233,38 @@ describe('AiChatSessionsService', () => {
       });
     });
 
+    it('still persists chat when follow-up generation throws', async () => {
+      llmIntentParser.parseUserMessage.mockResolvedValue({
+        requestType: 'USER_INVITE',
+        payload: { inviteeNicknames: ['player2'] },
+      });
+      llmFollowUpGenerator.generateCommandFollowUp.mockRejectedValue(
+        new Error('follow-up unavailable'),
+      );
+
+      const { requestRepo, messageRepo } = mockTransactions();
+
+      const result = await service.createMessage(user, sessionId, {
+        message: '@player2 초대해줘',
+      });
+
+      expect(result.requestStatus).toBe(AiChatRequestStatus.COMPLETED);
+      expect(messageRepo.save).toHaveBeenCalledTimes(2);
+      expect(requestRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: AiChatRequestStatus.COMPLETED,
+          responsePayload: expect.objectContaining({
+            followUp: expect.objectContaining({ source: 'static_fallback' }),
+          }),
+        }),
+      );
+    });
+
     it('returns FAILED clarification without downstream command execution', async () => {
       llmIntentParser.parseUserMessage.mockResolvedValue({
         requestType: null,
         confidence: 'low',
+        assistantHint: '무엇을 도와드릴까요?',
       });
 
       const { requestRepo, messageRepo } = mockTransactions();
@@ -227,7 +281,31 @@ describe('AiChatSessionsService', () => {
         }),
       );
       expect(messageRepo.save).toHaveBeenCalledTimes(2);
+      expect(result.assistantMessage.content).toBe('무엇을 도와드릴까요?');
       expect(result.requestStatus).toBe(AiChatRequestStatus.FAILED);
+    });
+
+    it('does not expose unsafe assistantHint in FAILED clarification response', async () => {
+      llmIntentParser.parseUserMessage.mockResolvedValue({
+        requestType: null,
+        confidence: 'low',
+        assistantHint: 'Bearer sk-secret1234567890 leaked',
+      });
+
+      const { messageRepo } = mockTransactions();
+
+      const result = await service.createMessage(user, sessionId, {
+        message: '안녕하세요',
+      });
+
+      expect(result.assistantMessage.content).toBe(DEFAULT_CLARIFICATION_MESSAGE);
+      expect(result.assistantMessage.content).not.toContain('Bearer');
+      expect(messageRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          messageType: AiChatMessageType.TEXT,
+          content: DEFAULT_CLARIFICATION_MESSAGE,
+        }),
+      );
     });
 
     it('persists history then throws AI_CHAT_COMMAND_NOT_SUPPORTED for unsupported LLM intent', async () => {

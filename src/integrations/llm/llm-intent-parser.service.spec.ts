@@ -1,4 +1,5 @@
 import { ConfigService } from '@nestjs/config';
+import type { PromptTemplateService } from '../../modules/prompt-template/prompt-template.service';
 import { LlmIntentParserService } from './llm-intent-parser.service';
 
 describe('LlmIntentParserService', () => {
@@ -11,10 +12,20 @@ describe('LlmIntentParserService', () => {
     }),
   } as unknown as ConfigService;
 
+  const promptTemplateService = {
+    renderTemplate: jest.fn(() => null),
+    getActiveTemplate: jest.fn(() => null),
+    refreshCache: jest.fn(),
+  } as unknown as PromptTemplateService;
+
   let service: LlmIntentParserService;
 
   beforeEach(() => {
-    service = new LlmIntentParserService(configService);
+    service = new LlmIntentParserService(configService, promptTemplateService);
+  });
+
+  it('falls back to default intent system prompt when seed template is absent', () => {
+    expect(service.resolveIntentSystemPrompt()).toContain('ROOM_CREATE');
   });
 
   it('heuristically parses ROOM_CREATE messages', async () => {

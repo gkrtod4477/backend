@@ -10,6 +10,7 @@ import type {
 } from '../../../shared/dto/ai-chat-command.dto';
 import type { LlmIntentRawResponse } from '../../../integrations/llm/llm-intent-parser.port';
 import { AI_CHAT_ERROR } from '../constants/ai-chat-error.constants';
+import { resolveClarificationAssistantContent } from './ai-chat-assistant-content';
 
 const SUPPORTED_TYPES = new Set<string>(Object.values(AiChatRequestType));
 const DIFFICULTIES = new Set<MissionDifficulty>(['EASY', 'NORMAL', 'HARD']);
@@ -42,9 +43,7 @@ export class AiChatIntentValidator {
     if (!raw.requestType) {
       return {
         outcome: 'clarification',
-        content:
-          raw.assistantHint ??
-          '요청을 이해하지 못했어요. 방 생성, 초대, 참가, 거절, 게임 시작 중 무엇을 원하시는지 알려주세요.',
+        content: resolveClarificationAssistantContent(raw.assistantHint),
       };
     }
 

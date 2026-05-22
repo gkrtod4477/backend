@@ -6,6 +6,7 @@ import { DatabaseModule } from './database/database.module';
 import { JwtIntegrationModule } from './integrations/jwt/jwt.module';
 import { AiChatSessionsModule } from './modules/ai-chat-sessions/ai-chat-sessions.module';
 import { AuthModule } from './modules/auth/auth.module';
+import { PromptTemplateModule } from './modules/prompt-template/prompt-template.module';
 import appConfig from './common/config/app.config';
 import databaseConfig from './common/config/database.config';
 import jwtConfig from './common/config/jwt.config';
@@ -23,6 +24,7 @@ import runtimeConfig from './common/config/runtime.config';
     DatabaseModule,
     JwtIntegrationModule,
     AuthModule,
+    PromptTemplateModule,
     AiChatSessionsModule,
   ],
   providers: [

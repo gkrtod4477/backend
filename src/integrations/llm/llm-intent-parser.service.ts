@@ -1,5 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { PROMPT_TEMPLATE_KEY } from '../../modules/prompt-template/constants/prompt-template-key.constants';
+import { PromptTemplateService } from '../../modules/prompt-template/prompt-template.service';
 import type {
   LlmIntentParseInput,
   LlmIntentParserPort,
@@ -14,7 +16,7 @@ const SUPPORTED_REQUEST_TYPES = [
   'GAME_START',
 ] as const;
 
-const SYSTEM_PROMPT = `You interpret Korean game-lobby chat into exactly one command intent.
+const DEFAULT_INTENT_SYSTEM_PROMPT = `You interpret Korean game-lobby chat into exactly one command intent.
 Supported requestType values: ${SUPPORTED_REQUEST_TYPES.join(', ')}.
 Return JSON only with keys: requestType, confidence ("high"|"low"), payload (object), assistantHint (short Korean string).
 payload fields by type:
@@ -29,7 +31,10 @@ If the message is not a lobby command, set requestType to null and confidence to
 export class LlmIntentParserService implements LlmIntentParserPort {
   private readonly logger = new Logger(LlmIntentParserService.name);
 
-  constructor(private readonly configService: ConfigService) {}
+  constructor(
+    private readonly configService: ConfigService,
+    private readonly promptTemplateService: PromptTemplateService,
+  ) {}
 
   async parseUserMessage(input: LlmIntentParseInput): Promise<LlmIntentRawResponse> {
     const apiKey = this.configService.get<string>('llm.apiKey');
@@ -73,7 +78,7 @@ export class LlmIntentParserService implements LlmIntentParserPort {
           temperature: 0,
           response_format: { type: 'json_object' },
           messages: [
-            { role: 'system', content: SYSTEM_PROMPT },
+            { role: 'system', content: this.resolveIntentSystemPrompt() },
             { role: 'user', content: userContent },
           ],
         }),
@@ -102,6 +107,14 @@ export class LlmIntentParserService implements LlmIntentParserPort {
     } finally {
       clearTimeout(timeout);
     }
+  }
+
+  resolveIntentSystemPrompt(): string {
+    const fromTemplate = this.promptTemplateService.renderTemplate(
+      PROMPT_TEMPLATE_KEY.CHAT_INTENT_PARSE,
+      {},
+    );
+    return fromTemplate ?? DEFAULT_INTENT_SYSTEM_PROMPT;
   }
 
   /** Deterministic fallback for local dev and tests when LLM is unavailable. */
