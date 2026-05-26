@@ -83,3 +83,108 @@
 - Start `C4` from this log and preserve `AiChatSessionsService -> Worker 2 service` authority boundaries. Do not reintroduce direct repository mutation from AI chat code.
 - If you need room-start context beyond `gameRoomId`, read the latest successful `ROOM_CREATE` request history first or promote that state into explicit persistence through the shared track.
 - Keep invitation mutation paths batch-safe; any future multi-user lobby change should preserve single-transaction behavior for the whole command.
+
+## [2026-05-26] C4: Connect game start, turn progression, and mission-result flow
+
+**Plan reference:** `docs/plans/common-sequential-plan.md`
+
+**Summary:**
+- Connected authoritative game start to first-turn creation and realtime `game-started` / `game-state-updated` broadcasts through a dedicated `GameStartFlowService`.
+- Implemented durable turn lifecycle persistence for submit and timeout: `turns`, `turn_snapshots`, `executions`, and `mission_results`, plus next-turn progression and final mission completion handling.
+- Addressed post-implementation `gpt-5.4` review findings by stopping `ERROR` judgments from silently advancing to the next turn, reseeding file buffers on both `game-started` and `turn-changed`, restoring event payload shapes to the documented contract, and adding a server-side timeout sweep service.
+
+**Dependencies reviewed before starting:**
+- `docs/implementaion-logs/README.md`
+- `docs/implementaion-logs/common/phase-2-integration.md`
+- `docs/implementaion-logs/worker-2/phase-2-missions.md`
+- `docs/implementaion-logs/worker-3/phase-1-realtime.md`
+- `docs/implementaion-logs/worker-3/phase-2-runtime.md`
+- `docs/plans/README.md`
+- `docs/plans/common-sequential-plan.md`
+- `docs/specs/00-overview.md`
+- `docs/specs/04-data-model.md`
+- `docs/specs/05-api-and-realtime.md`
+- `docs/specs/06-gameplay-lifecycle.md`
+- `docs/specs/07-integrations-and-ai.md`
+- `docs/specs/08-security-testing-and-delivery.md`
+
+**Implementation details:**
+- Added persistent `TurnEntity`, `TurnSnapshotEntity`, and `MissionResultEntity` plus migration `1764205300000-CreateTurnsAndMissionResultsTables.ts` so turn ownership, end-of-turn snapshots, execution outcomes, and judge results now survive realtime boundaries.
+- `GameRoomsService.startGame()` now creates the first turn and transitions the first mission step into active play inside the same authoritative room-start transaction. `GameStartFlowService` wraps that result into canonical `game-started` and `game-state-updated` broadcasts with initial `fileUrl` metadata for editor bootstrapping.
+- `TurnsService` now owns turn-end orchestration for manual submit and timeout: lock the turn, persist the snapshot, record execution, derive `PASSED | FAILED | ERROR`, update mission or room state, create the next turn when allowed, and return canonical realtime payloads.
+- Runtime container absence is now explicit instead of implicit corruption. `ExecutionsService` records `RUNTIME_CONTAINER_UNAVAILABLE`, and the `ERROR` branch keeps the room in an explicit no-next-turn state until an operator or later task resolves the runtime condition.
+- Realtime submit sequencing moved into `DefaultRealtimeTurnSubmitService`, which now publishes `turn-submit -> turn-evaluated -> turn-changed? -> mission-result? -> game-state-updated` in contract order instead of emitting the transition state too early.
+- `RealtimeEventSupportService` now seeds initial file buffers on both `game-started` and `turn-changed`, so the next player can submit without first editing and still produce a non-empty snapshot. `RealtimeTurnTimeoutService` performs a server-side sweep of expired `IN_PROGRESS` turns and routes them through the same timeout lifecycle.
+- AI-chat-driven `GAME_START` now goes through `GameStartFlowService`, so chat-started games and direct HTTP starts share the same turn initialization and realtime side effects.
+
+**Files changed:**
+- `database/migrations/1764205300000-CreateTurnsAndMissionResultsTables.ts`
+- `src/app.module.ts`
+- `src/modules/ai-chat-sessions/ai-chat-sessions.service.ts`
+- `src/modules/ai-chat-sessions/ai-chat-sessions.service.spec.ts`
+- `src/modules/executions/service/executions.service.ts`
+- `src/modules/game-rooms/controller/game-rooms.controller.ts`
+- `src/modules/game-rooms/game-rooms.module.ts`
+- `src/modules/game-rooms/service/game-rooms.service.ts`
+- `src/modules/game-rooms/service/game-rooms.service.spec.ts`
+- `src/modules/game-rooms/service/game-start-flow.service.ts`
+- `src/modules/game-rooms/service/game-start-flow.service.spec.ts`
+- `src/modules/mission-results/mission-results.module.ts`
+- `src/modules/mission-results/entity/mission-result.entity.ts`
+- `src/modules/mission-results/service/mission-results.service.ts`
+- `src/modules/realtime/gateway/realtime.gateway.ts`
+- `src/modules/realtime/gateway/realtime.gateway.spec.ts`
+- `src/modules/realtime/gateway/realtime.gateway.unit.spec.ts`
+- `src/modules/realtime/realtime.module.ts`
+- `src/modules/realtime/service/realtime-defaults.service.ts`
+- `src/modules/realtime/service/realtime-event-support.service.ts`
+- `src/modules/realtime/service/realtime-event-support.service.spec.ts`
+- `src/modules/realtime/service/realtime.interfaces.ts`
+- `src/modules/realtime/service/realtime-turn-timeout.service.ts`
+- `src/modules/realtime/service/realtime-turn-timeout.service.spec.ts`
+- `src/modules/turns/turns.module.ts`
+- `src/modules/turns/entity/turn.entity.ts`
+- `src/modules/turns/entity/turn-snapshot.entity.ts`
+- `src/modules/turns/service/turns.service.ts`
+- `src/modules/turns/service/turns.service.spec.ts`
+- `src/shared/enums/mission.enum.ts`
+
+**Verification:**
+- [x] `./node_modules/.bin/jest --runInBand src/modules/game-rooms/service/game-rooms.service.spec.ts src/modules/game-rooms/service/game-start-flow.service.spec.ts src/modules/turns/service/turns.service.spec.ts src/modules/realtime/service/realtime-event-support.service.spec.ts src/modules/realtime/service/realtime-turn-timeout.service.spec.ts src/modules/realtime/gateway/realtime.gateway.unit.spec.ts src/modules/ai-chat-sessions/ai-chat-sessions.service.spec.ts`
+- [x] `gpt-5.4` review subagent run twice. Initial findings on error-path advancement, no-edit submit buffers, event order, payload shape, and missing timeout orchestration were all fixed. Final re-review reported no remaining high-severity findings in scope.
+- [ ] `./node_modules/.bin/tsc --noEmit` could not be used as a clean repository-wide signal because this workspace currently reports unrelated `@nestjs/jwt` resolution failures before reaching the new C4 files.
+- [ ] `src/modules/realtime/gateway/realtime.gateway.spec.ts` could not be executed in this sandbox because the environment blocks socket binding with `listen EPERM: operation not permitted 0.0.0.0`.
+
+**Commit:**
+- `acdf7af` feat(common): 게임 진행 파이프라인 연결
+
+**Impact on next tasks:**
+- `C5` can now harden authorization, duplicate submit handling, reconnect cleanup, and timeout edge cases on top of a real submit/timeout pipeline instead of placeholder hooks.
+- Worker 3 follow-up work can assume canonical realtime payloads exist for `game-started`, `turn-evaluated`, `turn-changed`, `game-state-updated`, and `mission-result`, including seeded file buffers for no-edit submits.
+- Any future runtime or scheduler refinement must preserve the explicit `ERROR` branch behavior and the single authoritative turn lifecycle in `TurnsService`.
+
+**Design decisions made:**
+- Kept room-start state authority in `GameRoomsService`, but moved cross-cutting broadcast composition into `GameStartFlowService` so HTTP and AI-chat starts share one side-effect path without stuffing realtime concerns into the controller.
+- Chose data URLs for initial `fileUrl` payloads so the game-start contract can be satisfied immediately without introducing a new file-download endpoint in the same task.
+- Implemented timeout orchestration as a realtime-side sweep service instead of a separate queue or cron worker to keep the change local to the current NestJS process while satisfying the “server detects deadline” requirement.
+
+**Deviations from spec:**
+- The sandbox prevented running the full socket-bound integration spec, so websocket verification remains unit-level here even though the emitted event names and payload keys were aligned to `docs/specs/05-api-and-realtime.md`.
+
+**Trade-offs:**
+- `RealtimeTurnTimeoutService` currently uses a simple one-second in-process sweep. That is sufficient for MVP authority and keeps the diff local, but multi-instance or high-scale deployments will want a stronger distributed scheduling mechanism later.
+- Initial editor file loading uses inline `data:` URLs backed by mission structure or latest snapshot content. This keeps C4 self-contained, but a later dedicated file-serving endpoint may be preferable if mission files become large.
+
+**Open questions:**
+- [x] Should runtime or processing errors silently move the game to the next player? -> No. `ERROR` outcomes now remain explicit and stop before next-turn creation.
+- [x] Can a next player submit without editing and still get the last authoritative snapshot? -> Yes. Buffers are reseeded on `game-started` and `turn-changed`.
+- [x] Is server-driven timeout orchestration actually wired anywhere? -> Yes. `RealtimeTurnTimeoutService` sweeps expired turns and routes them through `timeoutTurn()`.
+
+**Open risks or follow-ups:**
+- Full websocket integration coverage still needs an environment that permits binding a listening socket, so CI or a developer machine should run `src/modules/realtime/gateway/realtime.gateway.spec.ts`.
+- Runtime preparation still records explicit container-unavailable errors when no mission container exists. If a later task adds real mission-container provisioning, it must preserve the same explicit execution and judge-state behavior on failure.
+
+**Instructions for the next worker:**
+- Start `C5` from `TurnsService`, `RealtimeTurnTimeoutService`, and `RealtimeEventSupportService`. Preserve the single authoritative turn-end pipeline instead of adding side paths for submit, timeout, or disconnect cleanup.
+- When tightening authorization or duplicate-submit handling, keep the server-time authority rule and do not reintroduce client-timestamp trust for turn completion.
+- If you need to change event payloads, check `docs/specs/05-api-and-realtime.md` first and update both `turns.service.ts` and the realtime support tests together.
