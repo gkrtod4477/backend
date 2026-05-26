@@ -90,3 +90,85 @@
 - Preserve the room-level advisory lock when adding any new mutation that changes lobby membership or room-start readiness.
 - Use `game_room_mission_steps` as the live step-state source of truth and `mission_template_steps.hint_text` as the hint-text source until AI-generated hints are intentionally introduced.
 - Do not move `container_id` into controller-managed or client-managed state; later runtime integration must fill it from the server-owned adapter layer.
+
+## [2026-05-26] W2-4: Implement hint retrieval and mission completion state transitions
+
+**Plan reference:** `docs/plans/worker-2-room-participant-mission-plan.md`
+
+**Summary:**
+- Added the authenticated hint API `GET /v1/game-room-missions/{missionId}/hints?scope=current-step` backed by the current room-mission step and `mission_template_steps.hint_text`.
+- Extended `GameRoomMissionsService` with reusable mission-step lifecycle helpers for `READY -> IN_PROGRESS`, step clear progression, strike accumulation, and strike-limit termination.
+- Kept Worker 2 scoped to authoritative room-mission state only, so final room-state finish and mission-result persistence remain available for shared `C4` without changing the canonical hint contract.
+
+**Dependencies reviewed before starting:**
+- `docs/plans/README.md`
+- `docs/plans/common-sequential-plan.md`
+- `docs/plans/worker-2-room-participant-mission-plan.md`
+- `docs/implementaion-logs/README.md`
+- `docs/implementaion-logs/common/phase-1-foundation.md`
+- `docs/implementaion-logs/worker-2/phase-1-lobby.md`
+- `docs/implementaion-logs/worker-2/phase-2-missions.md`
+- `docs/specs/00-overview.md`
+- `docs/specs/02-domain-model.md`
+- `docs/specs/03-modules.md`
+- `docs/specs/04-data-model.md`
+- `docs/specs/05-api-and-realtime.md`
+- `docs/specs/06-gameplay-lifecycle.md`
+- `docs/specs/07-integrations-and-ai.md`
+- `docs/specs/08-security-testing-and-delivery.md`
+
+**Implementation details:**
+- Added `GameRoomMissionsController` and registered it in `GameRoomMissionsModule` with `AuthenticatedRequestGuard`, exposing the canonical hint endpoint and rejecting unsupported hint scopes with an explicit `MISSION_HINT_SCOPE_INVALID` error.
+- `GameRoomMissionsService.getCurrentStepHint()` now loads the room mission, verifies the caller has `JOINED` membership in the owning room, and returns the current step metadata plus `hintText` from `mission_template_steps`.
+- Added explicit step-transition guards in `GameRoomMissionsService` so mission-step status changes stay within the canonical `LOCKED`, `READY`, `IN_PROGRESS`, `CLEARED`, `FAILED` lifecycle rather than letting downstream turn logic set arbitrary states.
+- Added `transitionCurrentStepToInProgress()`, `completeCurrentStep()`, and `recordFailedAttempt()` helper methods so shared `C4` can advance steps, unlock the next step, increment strikes, and terminate the mission at the strike limit without inventing a second mission-state transition path.
+- Mission completion helpers update `game_room_missions.current_step_id`, `strike_count`, and `finished_at`, but intentionally do not change `game_rooms.status`; final room finish remains the responsibility of shared integration when mission results and broadcasts are wired together.
+
+**Files changed:**
+- `src/modules/game-room-missions/controller/game-room-missions.controller.ts`
+- `src/modules/game-room-missions/game-room-missions.module.ts`
+- `src/modules/game-room-missions/service/game-room-missions.service.ts`
+- `src/modules/game-room-missions/service/game-room-missions.service.spec.ts`
+
+**Verification:**
+- [x] `corepack.cmd pnpm typecheck`
+- [x] `corepack.cmd pnpm lint`
+- [x] `.\node_modules\.bin\jest.cmd --runInBand src/modules/game-room-missions/service/game-room-missions.service.spec.ts`
+- [x] Manual check: hint retrieval uses `mission_template_steps.hint_text` as the primary source, matching `docs/specs/07-integrations-and-ai.md`.
+- [x] Manual check: helper methods keep mission-step statuses inside the canonical `LOCKED`, `READY`, `IN_PROGRESS`, `CLEARED`, `FAILED` set and leave final room completion for shared `C4`.
+- [x] `gpt-5.4` subagent review completed; final review reported no meaningful defects or contract regressions in W2-4 scope.
+- [ ] End-to-end HTTP verification of `GET /v1/game-room-missions/{missionId}/hints` was not run because the repository still lacks a DB-backed authenticated integration harness that can seed room missions and memberships for controller-level tests.
+
+**Commit:**
+- `79b8fa5` feat(worker-2): add mission hints and completion helpers
+
+**Impact on next tasks:**
+- Shared `C4` can reuse `GameRoomMissionsService` helpers instead of embedding step-clear, strike, and mission-finish mutations in turn or realtime code.
+- Worker 3 and shared integration now have a canonical server-owned hint endpoint for gameplay entry and in-game hint lookup without depending on AI-generated hint text.
+- Mission lifecycle authority stays centralized in Worker 2 services, reducing the chance that turn evaluation or broadcast code drifts from the persisted step-state rules.
+
+**Design decisions made:**
+- Kept hint reads authorized by active `JOINED` membership in the owning room rather than by mission ID alone, matching the service-layer authorization rule from `docs/specs/08-security-testing-and-delivery.md`.
+- Chose explicit service helpers over a generic public `setStatus()` API so downstream work cannot bypass transition validation accidentally.
+- Left `game_rooms.status = FINISHED` out of W2-4 helper methods because Worker 2 owns room-mission state here, while mission-result persistence, final broadcasts, and room finish sequencing are integrated later in shared `C4`.
+
+**Deviations from spec:**
+- None within W2-4 acceptance. AI-generated hints, mission-result persistence, and final room-status finish remain intentionally deferred to later tasks that own those broader integrations.
+
+**Trade-offs:**
+- Returned a single current-step hint payload instead of adding speculative multi-hint shapes because MVP hint policy names `mission_template_step.hint_text` as the source of truth and the contract only requires `scope=current-step`.
+- Did not add controller-level or DB-backed integration tests in this task because the existing repository verification surface is still unit-test-first for Worker 2 and the authenticated seeded mission flow is not yet scaffolded for E2E coverage.
+
+**Open questions:**
+- [x] Should the hint API wait for AI-generated hints before exposing gameplay hints? Resolved as `No`; MVP hint reads come from `mission_template_steps.hint_text` first.
+- [x] Should W2-4 helper methods also finalize `game_rooms.status`? Resolved as `No`; they only finalize room-mission state, and shared `C4` must sequence final room status with mission results and broadcasts.
+
+**Open risks or follow-ups:**
+- Shared `C4` must still persist `mission_results`, set `game_rooms.status = FINISHED`, and emit final gameplay broadcasts after these room-mission helpers run.
+- If a future contract adds spectator or reconnect semantics, `JOINED`-only hint access may need to be widened deliberately rather than changed ad hoc.
+- A later DB-backed integration test should exercise the hint endpoint and mission-step helper behavior against real persistence, especially around `current_step_id` updates and strike-limit finish.
+
+**Instructions for the next worker:**
+- Use `GameRoomMissionsService.transitionCurrentStepToInProgress()`, `completeCurrentStep()`, and `recordFailedAttempt()` as the only mission-step mutation path when wiring turn evaluation in `C4`.
+- Preserve `mission_template_steps.hint_text` as the primary hint contract until specs explicitly promote AI-generated hints to first-class API data.
+- When `C4` finishes a mission, update `game_rooms.status` and final broadcasts around these helpers rather than moving room-finish responsibility back into controllers or gateways.
