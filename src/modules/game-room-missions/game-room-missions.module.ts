@@ -1,4 +1,6 @@
 import { Module } from '@nestjs/common';
+import { AuthenticatedRequestGuard } from '@common/guards/authenticated-request.guard';
+import { GameRoomMissionsController } from './controller/game-room-missions.controller';
 import { GameRoomMissionsService } from './service/game-room-missions.service';
 
 /**
@@ -7,7 +9,8 @@ import { GameRoomMissionsService } from './service/game-room-missions.service';
  * To be implemented by Worker 2.
  */
 @Module({
-  providers: [GameRoomMissionsService],
+  controllers: [GameRoomMissionsController],
+  providers: [AuthenticatedRequestGuard, GameRoomMissionsService],
   exports: [GameRoomMissionsService],
 })
 export class GameRoomMissionsModule {}
