@@ -20,14 +20,56 @@ export class AiChatCommandResultMapper {
     };
   }
 
-  toFailedResult(requestType: AiChatRequestType): AiChatCommandResultDto {
+  toSuccessResult(
+    command: AiChatCommandDto,
+    details: {
+      apiPath?: string | null;
+      gameRoomId?: string | null;
+      participants?: string[] | null;
+      started?: boolean | null;
+    },
+  ): AiChatCommandResultDto {
+    return {
+      commandType: command.requestType,
+      status: AiChatCommandResultStatus.SUCCESS,
+      apiPath: details.apiPath ?? this.resolveApiPath(command),
+      gameRoomId: details.gameRoomId ?? this.resolveGameRoomId(command),
+      participants: details.participants ?? null,
+      started:
+        details.started ??
+        (command.requestType === AiChatRequestType.GAME_START ? true : null),
+    };
+  }
+
+  toFailedResult(
+    commandOrRequestType: AiChatCommandDto | AiChatRequestType,
+    details?: {
+      apiPath?: string | null;
+      gameRoomId?: string | null;
+      participants?: string[] | null;
+      started?: boolean | null;
+    },
+  ): AiChatCommandResultDto {
+    const command =
+      typeof commandOrRequestType === 'string'
+        ? null
+        : commandOrRequestType;
+    const requestType =
+      typeof commandOrRequestType === 'string'
+        ? commandOrRequestType
+        : commandOrRequestType.requestType;
+
     return {
       commandType: requestType,
       status: AiChatCommandResultStatus.FAILED,
-      apiPath: null,
-      gameRoomId: null,
-      participants: null,
-      started: null,
+      apiPath: details?.apiPath ?? (command ? this.resolveApiPath(command) : null),
+      gameRoomId:
+        details?.gameRoomId ??
+        (command ? this.resolveGameRoomId(command) : null),
+      participants: details?.participants ?? null,
+      started:
+        details?.started ??
+        (requestType === AiChatRequestType.GAME_START ? false : null),
     };
   }
 

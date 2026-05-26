@@ -78,24 +78,18 @@ const ALLOWED_STEP_TRANSITIONS: Record<
 export class GameRoomMissionsService {
   constructor(private readonly dataSource: DataSource) {}
 
-  async createMissionForGameStart(
-    input: CreateGameRoomMissionInput,
-  ): Promise<GameRoomMissionEntity> {
+  async validateMissionTemplateSelection(
+    roomDifficulty: string,
+    missionTemplateId: string,
+  ): Promise<MissionTemplateEntity> {
     const missionTemplateRepository =
-      input.manager.getRepository(MissionTemplateEntity);
-    const missionTemplateStepRepository = input.manager.getRepository(
+      this.dataSource.getRepository(MissionTemplateEntity);
+    const missionTemplateStepRepository = this.dataSource.getRepository(
       MissionTemplateStepEntity,
     );
-    const gameRoomMissionRepository =
-      input.manager.getRepository(GameRoomMissionEntity);
-    const gameRoomMissionStepRepository = input.manager.getRepository(
-      GameRoomMissionStepEntity,
-    );
-
-    await this.ensureNoExistingMission(gameRoomMissionRepository, input.gameRoomId);
 
     const missionTemplate = await missionTemplateRepository.findOne({
-      where: { id: input.missionTemplateId },
+      where: { id: missionTemplateId },
     });
 
     if (!missionTemplate) {
@@ -105,7 +99,7 @@ export class GameRoomMissionsService {
       });
     }
 
-    if (missionTemplate.difficulty !== input.roomDifficulty) {
+    if (missionTemplate.difficulty !== roomDifficulty) {
       throw new ConflictException({
         code: 'MISSION_TEMPLATE_DIFFICULTY_MISMATCH',
         message: 'Mission template difficulty does not match the room difficulty.',
@@ -123,6 +117,32 @@ export class GameRoomMissionsService {
         message: 'Mission template must have at least one step.',
       });
     }
+
+    return missionTemplate;
+  }
+
+  async createMissionForGameStart(
+    input: CreateGameRoomMissionInput,
+  ): Promise<GameRoomMissionEntity> {
+    const missionTemplateStepRepository = input.manager.getRepository(
+      MissionTemplateStepEntity,
+    );
+    const gameRoomMissionRepository =
+      input.manager.getRepository(GameRoomMissionEntity);
+    const gameRoomMissionStepRepository = input.manager.getRepository(
+      GameRoomMissionStepEntity,
+    );
+
+    await this.ensureNoExistingMission(gameRoomMissionRepository, input.gameRoomId);
+
+    const missionTemplate = await this.validateMissionTemplateSelection(
+      input.roomDifficulty,
+      input.missionTemplateId,
+    );
+    const missionTemplateSteps = await missionTemplateStepRepository.find({
+      where: { missionTemplateId: missionTemplate.id },
+      order: { stepOrder: 'ASC' },
+    });
 
     const gameRoomMission = gameRoomMissionRepository.create({
       gameRoomId: input.gameRoomId,

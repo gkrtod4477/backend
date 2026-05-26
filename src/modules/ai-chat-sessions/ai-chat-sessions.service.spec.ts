@@ -1,4 +1,7 @@
 import { HttpException, HttpStatus } from '@nestjs/common';
+import { GameRoomMissionsService } from '@modules/game-room-missions/service/game-room-missions.service';
+import { GameRoomParticipantsService } from '@modules/game-room-participants/service/game-room-participants.service';
+import { GameRoomsService } from '@modules/game-rooms/service/game-rooms.service';
 import { DataSource, Repository } from 'typeorm';
 import {
   AiChatMessageSenderType,
@@ -9,6 +12,8 @@ import {
 import { AiChatCommandResultStatus } from '../../shared/dto/ai-chat-command.dto';
 import type { LlmFollowUpGeneratorPort } from '../../integrations/llm/llm-follow-up.port';
 import type { LlmIntentParserPort } from '../../integrations/llm/llm-intent-parser.port';
+import { User } from '../auth/entity/user.entity';
+import { GameRoomParticipantEntity } from '../game-room-participants/entity/game-room-participant.entity';
 import { DEFAULT_CLARIFICATION_MESSAGE } from './intent/ai-chat-assistant-content';
 import { AI_CHAT_ERROR } from './constants/ai-chat-error.constants';
 import { AiChatSessionsService } from './ai-chat-sessions.service';
@@ -23,7 +28,12 @@ describe('AiChatSessionsService', () => {
   let aiChatSessionRepository: jest.Mocked<Repository<AiChatSession>>;
   let aiChatMessageRepository: jest.Mocked<Repository<AiChatMessage>>;
   let aiChatRequestRepository: jest.Mocked<Repository<AiChatRequest>>;
+  let userRepository: jest.Mocked<Repository<User>>;
+  let participantRepository: jest.Mocked<Repository<GameRoomParticipantEntity>>;
   let dataSource: jest.Mocked<DataSource>;
+  let gameRoomsService: jest.Mocked<GameRoomsService>;
+  let gameRoomMissionsService: jest.Mocked<GameRoomMissionsService>;
+  let gameRoomParticipantsService: jest.Mocked<GameRoomParticipantsService>;
   let llmIntentParser: jest.Mocked<LlmIntentParserPort>;
   let llmFollowUpGenerator: jest.Mocked<LlmFollowUpGeneratorPort>;
   let service: AiChatSessionsService;
@@ -32,17 +42,49 @@ describe('AiChatSessionsService', () => {
     aiChatSessionRepository = {
       find: jest.fn(),
       findOne: jest.fn(),
+      save: jest.fn(async (value) => value as AiChatSession),
     } as unknown as jest.Mocked<Repository<AiChatSession>>;
 
     aiChatMessageRepository = {
       find: jest.fn(),
     } as unknown as jest.Mocked<Repository<AiChatMessage>>;
 
-    aiChatRequestRepository = {} as unknown as jest.Mocked<Repository<AiChatRequest>>;
+    aiChatRequestRepository = {
+      find: jest.fn(),
+    } as unknown as jest.Mocked<Repository<AiChatRequest>>;
+
+    userRepository = {
+      find: jest.fn(),
+      findOne: jest.fn(),
+    } as unknown as jest.Mocked<Repository<User>>;
+
+    participantRepository = {
+      find: jest.fn(),
+      findOne: jest.fn(),
+    } as unknown as jest.Mocked<Repository<GameRoomParticipantEntity>>;
 
     dataSource = {
       transaction: jest.fn(),
     } as unknown as jest.Mocked<DataSource>;
+
+    gameRoomsService = {
+      createRoom: jest.fn(),
+      startGame: jest.fn(),
+      listAccessibleRooms: jest.fn(),
+    } as unknown as jest.Mocked<GameRoomsService>;
+
+    gameRoomMissionsService = {
+      validateMissionTemplateSelection: jest.fn(),
+    } as unknown as jest.Mocked<GameRoomMissionsService>;
+
+    gameRoomParticipantsService = {
+      inviteParticipant: jest.fn(),
+      inviteParticipants: jest.fn(),
+      acceptInvitation: jest.fn(),
+      denyInvitation: jest.fn(),
+      leaveRoom: jest.fn(),
+      listParticipantsForUser: jest.fn(),
+    } as unknown as jest.Mocked<GameRoomParticipantsService>;
 
     llmIntentParser = {
       parseUserMessage: jest.fn(),
@@ -61,7 +103,12 @@ describe('AiChatSessionsService', () => {
       aiChatSessionRepository,
       aiChatMessageRepository,
       aiChatRequestRepository,
+      userRepository,
+      participantRepository,
       dataSource,
+      gameRoomsService,
+      gameRoomMissionsService,
+      gameRoomParticipantsService,
       llmIntentParser,
       llmFollowUpGenerator,
     );
@@ -102,6 +149,16 @@ describe('AiChatSessionsService', () => {
             }
             if (entity === AiChatMessage) {
               return messageRepo;
+            }
+            if (entity === AiChatSession) {
+              return {
+                findOneOrFail: jest.fn(async () => ({
+                  id: sessionId,
+                  requesterUserId: user.userId,
+                  gameRoomId: null,
+                })),
+                save: jest.fn(async (value) => value),
+              };
             }
             throw new Error('Unexpected entity');
           },
@@ -182,6 +239,16 @@ describe('AiChatSessionsService', () => {
           getRepository: (entity: unknown) => {
             if (entity === AiChatRequest) return requestRepo;
             if (entity === AiChatMessage) return messageRepo;
+            if (entity === AiChatSession) {
+              return {
+                findOneOrFail: jest.fn(async () => ({
+                  id: sessionId,
+                  requesterUserId: user.userId,
+                  gameRoomId: null,
+                })),
+                save: jest.fn(async (value) => value),
+              };
+            }
             throw new Error('Unexpected entity');
           },
         };
@@ -238,6 +305,24 @@ describe('AiChatSessionsService', () => {
         requestType: 'USER_INVITE',
         payload: { inviteeNicknames: ['player2'] },
       });
+      userRepository.find.mockResolvedValue([
+        {
+          id: 'user-2',
+          nickname: 'player2',
+        } as User,
+      ]);
+      gameRoomParticipantsService.inviteParticipants.mockResolvedValue([
+        {
+          id: 'participant-2',
+          gameRoomId: 'room-1',
+          userId: 'user-2',
+        } as GameRoomParticipantEntity,
+      ] as never);
+      aiChatSessionRepository.findOne.mockResolvedValue({
+        id: sessionId,
+        requesterUserId: user.userId,
+        gameRoomId: 'room-1',
+      } as AiChatSession);
       llmFollowUpGenerator.generateCommandFollowUp.mockRejectedValue(
         new Error('follow-up unavailable'),
       );
@@ -258,6 +343,341 @@ describe('AiChatSessionsService', () => {
           }),
         }),
       );
+    });
+
+    it('executes ROOM_CREATE when difficulty and missionTemplateId are resolved', async () => {
+      llmIntentParser.parseUserMessage.mockResolvedValue({
+        requestType: 'ROOM_CREATE',
+        payload: {
+          desiredDifficulty: 'EASY',
+          missionTemplateId: 'template-1',
+        },
+      });
+      mockTransactions();
+      gameRoomMissionsService.validateMissionTemplateSelection.mockResolvedValue({
+        id: 'template-1',
+      } as never);
+      gameRoomsService.createRoom.mockResolvedValue({
+        id: 'room-1',
+      } as never);
+      userRepository.findOne.mockResolvedValue({
+        id: user.userId,
+        nickname: 'owner',
+      } as User);
+
+      const result = await service.createMessage(user, sessionId, {
+        message: '쉬운 방 만들고 template-1으로 진행할게',
+      });
+
+      expect(gameRoomsService.createRoom).toHaveBeenCalledWith({
+        ownerUserId: user.userId,
+        difficulty: 'EASY',
+        timeLimitSeconds: 30,
+        maxStrikeCount: 3,
+        minParticipants: 2,
+        maxParticipants: 4,
+      });
+      expect(result).toMatchObject({
+        requestType: AiChatRequestType.ROOM_CREATE,
+        requestStatus: AiChatRequestStatus.COMPLETED,
+        commandResult: {
+          commandType: AiChatRequestType.ROOM_CREATE,
+          status: AiChatCommandResultStatus.SUCCESS,
+          gameRoomId: 'room-1',
+          participants: ['owner'],
+        },
+      });
+    });
+
+    it('executes ROOM_JOIN through the participant service when invitation context is available', async () => {
+      llmIntentParser.parseUserMessage.mockResolvedValue({
+        requestType: 'ROOM_JOIN',
+        payload: {},
+      });
+      mockTransactions();
+      participantRepository.findOne.mockResolvedValueOnce({
+        id: 'participant-1',
+        gameRoomId: 'room-1',
+        userId: user.userId,
+      } as GameRoomParticipantEntity);
+      gameRoomParticipantsService.acceptInvitation.mockResolvedValue({
+        id: 'participant-1',
+        gameRoomId: 'room-1',
+        userId: user.userId,
+      } as GameRoomParticipantEntity);
+      participantRepository.find.mockResolvedValue([
+        {
+          id: 'participant-owner',
+          gameRoomId: 'room-1',
+          userId: 'owner-1',
+        } as GameRoomParticipantEntity,
+        {
+          id: 'participant-1',
+          gameRoomId: 'room-1',
+          userId: user.userId,
+        } as GameRoomParticipantEntity,
+      ]);
+      userRepository.find.mockResolvedValue([
+        { id: 'owner-1', nickname: 'owner' } as User,
+        { id: user.userId, nickname: 'player1' } as User,
+      ]);
+
+      const result = await service.createMessage(user, sessionId, {
+        message: '초대 수락할게',
+      });
+
+      expect(gameRoomParticipantsService.acceptInvitation).toHaveBeenCalledWith({
+        actorUserId: user.userId,
+        participantId: 'participant-1',
+      });
+      expect(result).toMatchObject({
+        requestType: AiChatRequestType.ROOM_JOIN,
+        requestStatus: AiChatRequestStatus.COMPLETED,
+        commandResult: {
+          commandType: AiChatRequestType.ROOM_JOIN,
+          status: AiChatCommandResultStatus.SUCCESS,
+          apiPath: '/v1/game-room-participants/participant-1/join',
+          gameRoomId: 'room-1',
+          participants: ['owner', 'player1'],
+        },
+      });
+    });
+
+    it('starts the game from the mission template selected during successful ROOM_CREATE', async () => {
+      aiChatSessionRepository.findOne.mockResolvedValue({
+        id: sessionId,
+        requesterUserId: user.userId,
+        gameRoomId: 'room-1',
+      } as AiChatSession);
+      llmIntentParser.parseUserMessage.mockResolvedValue({
+        requestType: 'GAME_START',
+        payload: {},
+      });
+      mockTransactions();
+      aiChatRequestRepository.find.mockResolvedValue([
+        {
+          requestPayload: {
+            command: {
+              requestType: AiChatRequestType.ROOM_CREATE,
+              desiredDifficulty: 'EASY',
+              missionTemplateId: 'template-1',
+            },
+          },
+          responsePayload: {
+            commandResult: {
+              status: AiChatCommandResultStatus.SUCCESS,
+              gameRoomId: 'room-1',
+            },
+          },
+          requestedAt: new Date(),
+        } as unknown as AiChatRequest,
+      ]);
+      gameRoomsService.startGame.mockResolvedValue({
+        gameRoom: { id: 'room-1' },
+        gameRoomMissionId: 'mission-1',
+      } as never);
+      participantRepository.find.mockResolvedValue([
+        {
+          id: 'participant-owner',
+          gameRoomId: 'room-1',
+          userId: user.userId,
+        } as GameRoomParticipantEntity,
+      ]);
+      userRepository.find.mockResolvedValue([
+        { id: user.userId, nickname: 'player1' } as User,
+      ]);
+
+      const result = await service.createMessage(user, sessionId, {
+        message: '게임 시작할게',
+      });
+
+      expect(gameRoomsService.startGame).toHaveBeenCalledWith({
+        actorUserId: user.userId,
+        gameRoomId: 'room-1',
+        missionTemplateId: 'template-1',
+      });
+      expect(result).toMatchObject({
+        requestType: AiChatRequestType.GAME_START,
+        requestStatus: AiChatRequestStatus.COMPLETED,
+        commandResult: {
+          commandType: AiChatRequestType.GAME_START,
+          status: AiChatCommandResultStatus.SUCCESS,
+          gameRoomId: 'room-1',
+          started: true,
+        },
+      });
+    });
+
+    it('returns FAILED commandResult when room lifecycle validation rejects the command', async () => {
+      aiChatSessionRepository.findOne.mockResolvedValue({
+        id: sessionId,
+        requesterUserId: user.userId,
+        gameRoomId: 'room-1',
+      } as AiChatSession);
+      llmIntentParser.parseUserMessage.mockResolvedValue({
+        requestType: 'GAME_START',
+        payload: {},
+      });
+      mockTransactions();
+      aiChatRequestRepository.find.mockResolvedValue([
+        {
+          requestPayload: {
+            command: {
+              requestType: AiChatRequestType.ROOM_CREATE,
+              desiredDifficulty: 'EASY',
+              missionTemplateId: 'template-1',
+            },
+          },
+          responsePayload: {
+            commandResult: {
+              status: AiChatCommandResultStatus.SUCCESS,
+              gameRoomId: 'room-1',
+            },
+          },
+          requestedAt: new Date(),
+        } as unknown as AiChatRequest,
+      ]);
+      gameRoomsService.startGame.mockRejectedValue(
+        new HttpException(
+          {
+            code: 'ROOM_START_CONDITION_NOT_MET',
+            message: 'Game start conditions are not satisfied',
+          },
+          HttpStatus.CONFLICT,
+        ),
+      );
+
+      const result = await service.createMessage(user, sessionId, {
+        message: '게임 바로 시작해',
+      });
+
+      expect(result.requestStatus).toBe(AiChatRequestStatus.FAILED);
+      expect(result.assistantMessage.content).toBe('Game start conditions are not satisfied');
+      expect(result.commandResult).toMatchObject({
+        commandType: AiChatRequestType.GAME_START,
+        status: AiChatCommandResultStatus.FAILED,
+        gameRoomId: 'room-1',
+      });
+    });
+
+    it('does not create a room when mission template validation fails', async () => {
+      llmIntentParser.parseUserMessage.mockResolvedValue({
+        requestType: 'ROOM_CREATE',
+        payload: {
+          desiredDifficulty: 'EASY',
+          missionTemplateId: 'template-missing',
+        },
+      });
+      mockTransactions();
+      gameRoomMissionsService.validateMissionTemplateSelection.mockRejectedValue(
+        new HttpException(
+          {
+            code: 'MISSION_TEMPLATE_NOT_FOUND',
+            message: 'Mission template was not found.',
+          },
+          HttpStatus.NOT_FOUND,
+        ),
+      );
+
+      const result = await service.createMessage(user, sessionId, {
+        message: '없는 템플릿으로 방 만들어줘',
+      });
+
+      expect(gameRoomsService.createRoom).not.toHaveBeenCalled();
+      expect(result.requestStatus).toBe(AiChatRequestStatus.FAILED);
+      expect(result.commandResult).toMatchObject({
+        commandType: AiChatRequestType.ROOM_CREATE,
+        status: AiChatCommandResultStatus.FAILED,
+      });
+    });
+
+    it('uses batch invite execution so invite failures do not partially persist inside ai-chat flow', async () => {
+      llmIntentParser.parseUserMessage.mockResolvedValue({
+        requestType: 'USER_INVITE',
+        payload: { inviteeNicknames: ['player2', 'player3'] },
+      });
+      mockTransactions();
+      aiChatSessionRepository.findOne.mockResolvedValue({
+        id: sessionId,
+        requesterUserId: user.userId,
+        gameRoomId: 'room-1',
+      } as AiChatSession);
+      userRepository.find.mockResolvedValue([
+        { id: 'user-2', nickname: 'player2' } as User,
+        { id: 'user-3', nickname: 'player3' } as User,
+      ]);
+      gameRoomParticipantsService.inviteParticipants.mockResolvedValue([
+        {
+          id: 'participant-2',
+          gameRoomId: 'room-1',
+          userId: 'user-2',
+        } as GameRoomParticipantEntity,
+        {
+          id: 'participant-3',
+          gameRoomId: 'room-1',
+          userId: 'user-3',
+        } as GameRoomParticipantEntity,
+      ] as never);
+
+      const result = await service.createMessage(user, sessionId, {
+        message: 'player2, player3 초대해줘',
+      });
+
+      expect(gameRoomParticipantsService.inviteParticipants).toHaveBeenCalledWith({
+        actorUserId: user.userId,
+        gameRoomId: 'room-1',
+        invitedUserIds: ['user-2', 'user-3'],
+      });
+      expect(gameRoomParticipantsService.inviteParticipant).not.toHaveBeenCalled();
+      expect(result.commandResult).toMatchObject({
+        commandType: AiChatRequestType.USER_INVITE,
+        status: AiChatCommandResultStatus.SUCCESS,
+        participants: ['player2', 'player3'],
+      });
+    });
+
+    it('resolves owner fallback only against WAITING rooms', async () => {
+      llmIntentParser.parseUserMessage.mockResolvedValue({
+        requestType: 'USER_INVITE',
+        payload: { inviteeNicknames: ['player2'] },
+      });
+      mockTransactions();
+      participantRepository.findOne.mockResolvedValue({
+        gameRoomId: 'waiting-room-1',
+      } as GameRoomParticipantEntity);
+      userRepository.find.mockResolvedValue([
+        { id: 'user-2', nickname: 'player2' } as User,
+      ]);
+      gameRoomParticipantsService.inviteParticipants.mockResolvedValue([
+        {
+          id: 'participant-2',
+          gameRoomId: 'waiting-room-1',
+          userId: 'user-2',
+        } as GameRoomParticipantEntity,
+      ] as never);
+
+      const result = await service.createMessage(user, sessionId, {
+        message: 'player2 초대해줘',
+      });
+
+      expect(participantRepository.findOne).toHaveBeenCalledWith({
+        relations: { gameRoom: true },
+        where: {
+          userId: user.userId,
+          role: 'OWNER',
+          membershipStatus: 'JOINED',
+          gameRoom: {
+            status: 'WAITING',
+          },
+        },
+        order: { createdAt: 'DESC' },
+      });
+      expect(gameRoomParticipantsService.inviteParticipants).toHaveBeenCalledWith({
+        actorUserId: user.userId,
+        gameRoomId: 'waiting-room-1',
+        invitedUserIds: ['user-2'],
+      });
+      expect(result.commandResult?.gameRoomId).toBe('waiting-room-1');
     });
 
     it('returns FAILED clarification without downstream command execution', async () => {

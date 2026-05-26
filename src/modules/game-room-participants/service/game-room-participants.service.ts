@@ -19,6 +19,12 @@ interface InviteParticipantInput {
   invitedUserId: string;
 }
 
+interface InviteParticipantsInput {
+  actorUserId: string;
+  gameRoomId: string;
+  invitedUserIds: string[];
+}
+
 interface ProcessInvitationInput {
   actorUserId: string;
   participantId: string;
@@ -97,14 +103,32 @@ export class GameRoomParticipantsService {
   async inviteParticipant(
     input: InviteParticipantInput,
   ): Promise<GameRoomParticipantEntity> {
+    const [participant] = await this.inviteParticipants({
+      actorUserId: input.actorUserId,
+      gameRoomId: input.gameRoomId,
+      invitedUserIds: [input.invitedUserId],
+    });
+
+    return participant;
+  }
+
+  async inviteParticipants(
+    input: InviteParticipantsInput,
+  ): Promise<GameRoomParticipantEntity[]> {
     return this.dataSource.transaction(async (manager) => {
+      const invitedUserIds = [...new Set(input.invitedUserIds)];
+
+      if (invitedUserIds.length === 0) {
+        return [];
+      }
+
       const gameRoomRepository = manager.getRepository(GameRoomEntity);
       const lockedRoom = await this.getRoomOrThrow(gameRoomRepository, input.gameRoomId);
 
       await this.acquireRoomLifecycleLock(manager, lockedRoom.id);
       await this.acquireWaitingRoomLocks(manager, [
         input.actorUserId,
-        input.invitedUserId,
+        ...invitedUserIds,
       ]);
 
       const participantRepository = manager.getRepository(GameRoomParticipantEntity);
@@ -117,33 +141,39 @@ export class GameRoomParticipantsService {
         input.actorUserId,
       );
 
-      const existingMembership = await participantRepository.findOne({
-        where: {
-          gameRoomId: input.gameRoomId,
-          userId: input.invitedUserId,
-        },
-      });
+      const participantsToCreate: GameRoomParticipantEntity[] = [];
 
-      if (existingMembership) {
-        throw new ConflictException({
-          code: 'DUPLICATE_ROOM_MEMBERSHIP',
-          message: 'User is already associated with this room.',
+      for (const invitedUserId of invitedUserIds) {
+        const existingMembership = await participantRepository.findOne({
+          where: {
+            gameRoomId: input.gameRoomId,
+            userId: invitedUserId,
+          },
         });
+
+        if (existingMembership) {
+          throw new ConflictException({
+            code: 'DUPLICATE_ROOM_MEMBERSHIP',
+            message: 'User is already associated with this room.',
+          });
+        }
+
+        await this.ensureNoOtherWaitingRoomMembership(
+          participantRepository,
+          invitedUserId,
+        );
+
+        participantsToCreate.push(
+          participantRepository.create({
+            gameRoomId: input.gameRoomId,
+            userId: invitedUserId,
+            role: GameRoomParticipantRole.PARTICIPANT,
+            membershipStatus: GameRoomParticipantMembershipStatus.INVITED,
+          }),
+        );
       }
 
-      await this.ensureNoOtherWaitingRoomMembership(
-        participantRepository,
-        input.invitedUserId,
-      );
-
-      const participant = participantRepository.create({
-        gameRoomId: input.gameRoomId,
-        userId: input.invitedUserId,
-        role: GameRoomParticipantRole.PARTICIPANT,
-        membershipStatus: GameRoomParticipantMembershipStatus.INVITED,
-      });
-
-      return participantRepository.save(participant);
+      return participantRepository.save(participantsToCreate);
     });
   }
 

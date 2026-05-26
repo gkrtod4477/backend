@@ -279,13 +279,15 @@ describe('GameRoomParticipantsService', () => {
       role: GameRoomParticipantRole.PARTICIPANT,
       membershipStatus: GameRoomParticipantMembershipStatus.INVITED,
     } as GameRoomParticipantEntity);
-    participantRepository.save.mockResolvedValue({
-      id: 'participant-1',
-      gameRoomId: 'room-1',
-      userId: 'invitee-1',
-      role: GameRoomParticipantRole.PARTICIPANT,
-      membershipStatus: GameRoomParticipantMembershipStatus.INVITED,
-    } as GameRoomParticipantEntity);
+    participantRepository.save.mockResolvedValue([
+      {
+        id: 'participant-1',
+        gameRoomId: 'room-1',
+        userId: 'invitee-1',
+        role: GameRoomParticipantRole.PARTICIPANT,
+        membershipStatus: GameRoomParticipantMembershipStatus.INVITED,
+      } as GameRoomParticipantEntity,
+    ] as never);
 
     const result = await service.inviteParticipant({
       actorUserId: 'owner-1',

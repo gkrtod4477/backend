@@ -77,6 +77,14 @@ describe('GameRoomMissionsService', () => {
 
     dataSource = {
       getRepository: jest.fn((entity) => {
+        if (entity === MissionTemplateEntity) {
+          return missionTemplateRepository;
+        }
+
+        if (entity === MissionTemplateStepEntity) {
+          return missionTemplateStepRepository;
+        }
+
         if (entity === GameRoomMissionEntity) {
           return gameRoomMissionRepository;
         }
@@ -90,6 +98,29 @@ describe('GameRoomMissionsService', () => {
     };
 
     service = new GameRoomMissionsService(dataSource as unknown as DataSource);
+  });
+
+  it('validates mission template selection before room creation', async () => {
+    missionTemplateRepository.findOne.mockResolvedValue({
+      id: 'template-1',
+      difficulty: 'EASY',
+    } as MissionTemplateEntity);
+    missionTemplateStepRepository.find.mockResolvedValue([
+      {
+        id: 'template-step-1',
+        missionTemplateId: 'template-1',
+        stepOrder: 1,
+      } as MissionTemplateStepEntity,
+    ]);
+
+    const result = await service.validateMissionTemplateSelection(
+      'EASY',
+      'template-1',
+    );
+
+    expect(result.id).toBe('template-1');
+    expect(dataSource.getRepository).toHaveBeenCalledWith(MissionTemplateEntity);
+    expect(dataSource.getRepository).toHaveBeenCalledWith(MissionTemplateStepEntity);
   });
 
   it('creates a room mission with the first step ready and later steps locked', async () => {
