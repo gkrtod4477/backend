@@ -1,3 +1,4 @@
+import { ConflictException, ForbiddenException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DataSource, EntityManager } from 'typeorm';
 import { ExecutionEntity } from '@modules/executions/entity/execution.entity';
@@ -258,6 +259,339 @@ describe('TurnsService', () => {
     });
     expect(result.gameStateUpdatedEvent.gameState).toMatchObject({
       status: GameRoomStatus.FINISHED,
+    });
+  });
+
+  it('rejects duplicate submit when the turn is no longer in progress', async () => {
+    const room = createRoom();
+    const mission = createMission();
+    const currentStep = createCurrentStep();
+    const turn = {
+      ...createTurn(),
+      status: TurnStatus.SUBMITTED,
+    };
+    const manager = createManager({
+      room,
+      mission,
+      currentStep,
+      turns: [turn],
+      participants: createParticipants(),
+      snapshots: [],
+    });
+    const dataSource = {
+      transaction: jest.fn(async (callback: (manager: EntityManager) => unknown) =>
+        callback(manager as unknown as EntityManager),
+      ),
+    } as unknown as DataSource;
+    const service = new TurnsService(
+      {
+        get: jest.fn().mockReturnValue(10000),
+      } as unknown as ConfigService,
+      dataSource,
+      {} as GameRoomMissionsService,
+      {} as ExecutionsService,
+      {} as MissionResultsService,
+    );
+
+    await expect(
+      service.submitTurn({
+        gameRoomId: room.id,
+        turnId: turn.id,
+        userId: turn.playerUserId,
+        occurredAt: '2026-05-26T10:00:10+09:00',
+        files: [],
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('rejects submit from a non-current turn player', async () => {
+    const room = createRoom();
+    const mission = createMission();
+    const currentStep = createCurrentStep();
+    const turn = createTurn();
+    const manager = createManager({
+      room,
+      mission,
+      currentStep,
+      turns: [turn],
+      participants: createParticipants(),
+      snapshots: [],
+    });
+    const dataSource = {
+      transaction: jest.fn(async (callback: (manager: EntityManager) => unknown) =>
+        callback(manager as unknown as EntityManager),
+      ),
+    } as unknown as DataSource;
+    const service = new TurnsService(
+      {
+        get: jest.fn().mockReturnValue(10000),
+      } as unknown as ConfigService,
+      dataSource,
+      {} as GameRoomMissionsService,
+      {} as ExecutionsService,
+      {} as MissionResultsService,
+    );
+
+    await expect(
+      service.submitTurn({
+        gameRoomId: room.id,
+        turnId: turn.id,
+        userId: 'user-2',
+        occurredAt: '2026-05-26T10:00:10+09:00',
+        files: [],
+      }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('uses the same finish pipeline for timeout as manual submit', async () => {
+    const room = createRoom();
+    const mission = createMission();
+    const currentStep = createCurrentStep();
+    const turn = createTurn();
+    const participants = createParticipants();
+    const snapshots: TurnSnapshotEntity[] = [];
+    const turns = [turn];
+    const manager = createManager({
+      room,
+      mission,
+      currentStep,
+      turns,
+      participants,
+      snapshots,
+    });
+    const dataSource = {
+      transaction: jest.fn(async (callback: (manager: EntityManager) => unknown) =>
+        callback(manager as unknown as EntityManager),
+      ),
+    } as unknown as DataSource;
+    const executionsService: jest.Mocked<Pick<ExecutionsService, 'executeTurnCode'>> = {
+      executeTurnCode: jest.fn().mockResolvedValue({
+        id: 'execution-timeout',
+        status: ExecutionStatus.TIMEOUT,
+        exitCode: null,
+        stdout: '',
+        stderr: 'timeout',
+        runtimeFailureCode: null,
+        runtimeFailureMessage: null,
+      } as ExecutionEntity),
+    };
+    const gameRoomMissionsService: jest.Mocked<
+      Pick<GameRoomMissionsService, 'recordFailedAttempt'>
+    > = {
+      recordFailedAttempt: jest.fn().mockResolvedValue({
+        mission,
+        currentStep,
+        missionFinished: false,
+      }),
+    };
+    const missionResultsService: jest.Mocked<
+      Pick<MissionResultsService, 'createMissionResult'>
+    > = {
+      createMissionResult: jest.fn().mockResolvedValue({} as never),
+    };
+    const service = new TurnsService(
+      {
+        get: jest.fn().mockReturnValue(10000),
+      } as unknown as ConfigService,
+      dataSource,
+      gameRoomMissionsService as unknown as GameRoomMissionsService,
+      executionsService as unknown as ExecutionsService,
+      missionResultsService as unknown as MissionResultsService,
+    );
+
+    const result = await service.timeoutTurn({
+      gameRoomId: room.id,
+      turnId: turn.id,
+      userId: turn.playerUserId,
+      occurredAt: '2026-05-26T10:00:10+09:00',
+      files: [],
+    });
+
+    expect(turn.status).toBe(TurnStatus.TIMEOUT);
+    expect(result.submitEvent.turnId).toBe(turn.id);
+    expect(executionsService.executeTurnCode).toHaveBeenCalled();
+    expect(missionResultsService.createMissionResult).toHaveBeenCalled();
+  });
+
+  it('creates the next turn on failed timeout when room progression continues', async () => {
+    const room = createRoom();
+    const mission = createMission();
+    const currentStep = createCurrentStep();
+    const turn = createTurn();
+    const participants = createParticipants();
+    const snapshots: TurnSnapshotEntity[] = [];
+    const turns = [turn];
+    const manager = createManager({
+      room,
+      mission,
+      currentStep,
+      turns,
+      participants,
+      snapshots,
+    });
+    const dataSource = {
+      transaction: jest.fn(async (callback: (manager: EntityManager) => unknown) =>
+        callback(manager as unknown as EntityManager),
+      ),
+    } as unknown as DataSource;
+    const gameRoomMissionsService: jest.Mocked<
+      Pick<
+        GameRoomMissionsService,
+        'completeCurrentStep' | 'recordFailedAttempt' | 'transitionCurrentStepToInProgress'
+      >
+    > = {
+      completeCurrentStep: jest.fn(),
+      recordFailedAttempt: jest.fn().mockResolvedValue({
+        mission: {
+          ...mission,
+          strikeCount: 1,
+        },
+        currentStep,
+        missionFinished: false,
+      }),
+      transitionCurrentStepToInProgress: jest.fn().mockResolvedValue(currentStep),
+    };
+    const executionsService: jest.Mocked<Pick<ExecutionsService, 'executeTurnCode'>> = {
+      executeTurnCode: jest.fn().mockResolvedValue({
+        id: 'execution-1',
+        status: ExecutionStatus.FAILED,
+        exitCode: 1,
+        stdout: '',
+        stderr: 'failed',
+        runtimeFailureCode: null,
+        runtimeFailureMessage: null,
+      } as ExecutionEntity),
+    };
+    const missionResultsService: jest.Mocked<
+      Pick<MissionResultsService, 'createMissionResult'>
+    > = {
+      createMissionResult: jest.fn().mockResolvedValue({} as never),
+    };
+    const service = new TurnsService(
+      {
+        get: jest.fn().mockReturnValue(10000),
+      } as unknown as ConfigService,
+      dataSource,
+      gameRoomMissionsService as unknown as GameRoomMissionsService,
+      executionsService as unknown as ExecutionsService,
+      missionResultsService as unknown as MissionResultsService,
+    );
+
+    const result = await service.timeoutTurn({
+      gameRoomId: room.id,
+      turnId: turn.id,
+      userId: turn.playerUserId,
+      occurredAt: '2026-05-26T10:00:10+09:00',
+      files: [
+        {
+          gameRoomId: room.id,
+          turnId: turn.id,
+          userId: turn.playerUserId,
+          filePath: 'main.py',
+          content: 'print("timeout")\n',
+          occurredAt: '2026-05-26T10:00:00+09:00',
+        },
+      ],
+    });
+
+    expect(turn.status).toBe(TurnStatus.TIMEOUT);
+    expect(turns).toHaveLength(2);
+    expect(result.turnChangedEvent).not.toBeNull();
+    expect(gameRoomMissionsService.recordFailedAttempt).toHaveBeenCalled();
+    expect(missionResultsService.createMissionResult).toHaveBeenCalled();
+  });
+
+  it('suppresses next turn creation for disconnect-induced room termination', async () => {
+    const room = createRoom();
+    const mission = createMission();
+    const currentStep = createCurrentStep();
+    const turn = createTurn();
+    const participants = createParticipants();
+    const snapshots: TurnSnapshotEntity[] = [];
+    const turns = [turn];
+    const manager = createManager({
+      room,
+      mission,
+      currentStep,
+      turns,
+      participants,
+      snapshots,
+    });
+    const dataSource = {
+      transaction: jest.fn(async (callback: (manager: EntityManager) => unknown) =>
+        callback(manager as unknown as EntityManager),
+      ),
+    } as unknown as DataSource;
+    const gameRoomMissionsService: jest.Mocked<
+      Pick<
+        GameRoomMissionsService,
+        'completeCurrentStep' | 'recordFailedAttempt' | 'transitionCurrentStepToInProgress'
+      >
+    > = {
+      completeCurrentStep: jest.fn(),
+      recordFailedAttempt: jest.fn().mockResolvedValue({
+        mission: {
+          ...mission,
+          strikeCount: 1,
+        },
+        currentStep,
+        missionFinished: false,
+      }),
+      transitionCurrentStepToInProgress: jest.fn(),
+    };
+    const executionsService: jest.Mocked<Pick<ExecutionsService, 'executeTurnCode'>> = {
+      executeTurnCode: jest.fn().mockResolvedValue({
+        id: 'execution-1',
+        status: ExecutionStatus.FAILED,
+        exitCode: 1,
+        stdout: '',
+        stderr: 'failed',
+        runtimeFailureCode: null,
+        runtimeFailureMessage: null,
+      } as ExecutionEntity),
+    };
+    const missionResultsService: jest.Mocked<
+      Pick<MissionResultsService, 'createMissionResult'>
+    > = {
+      createMissionResult: jest.fn().mockResolvedValue({} as never),
+    };
+    const service = new TurnsService(
+      {
+        get: jest.fn().mockReturnValue(10000),
+      } as unknown as ConfigService,
+      dataSource,
+      gameRoomMissionsService as unknown as GameRoomMissionsService,
+      executionsService as unknown as ExecutionsService,
+      missionResultsService as unknown as MissionResultsService,
+    );
+
+    const result = await service.timeoutTurn({
+      gameRoomId: room.id,
+      turnId: turn.id,
+      userId: turn.playerUserId,
+      occurredAt: '2026-05-26T10:00:10+09:00',
+      files: [
+        {
+          gameRoomId: room.id,
+          turnId: turn.id,
+          userId: turn.playerUserId,
+          filePath: 'main.py',
+          content: 'print("timeout")\n',
+          occurredAt: '2026-05-26T10:00:00+09:00',
+        },
+      ],
+      suppressNextTurnCreation: true,
+    });
+
+    expect(turn.status).toBe(TurnStatus.TIMEOUT);
+    expect(turns).toHaveLength(1);
+    expect(result.turnChangedEvent).toBeNull();
+    expect(gameRoomMissionsService.transitionCurrentStepToInProgress).not.toHaveBeenCalled();
+    expect(gameRoomMissionsService.recordFailedAttempt).toHaveBeenCalled();
+    expect(missionResultsService.createMissionResult).toHaveBeenCalled();
+    expect(result.gameStateUpdatedEvent.gameState).toMatchObject({
+      status: GameRoomStatus.FINISHED,
+      turnState: null,
     });
   });
 

@@ -13,7 +13,10 @@ import {
 describe('GameRoomParticipantsService', () => {
   let service: GameRoomParticipantsService;
   let participantRepository: jest.Mocked<
-    Pick<Repository<GameRoomParticipantEntity>, 'create' | 'save' | 'find' | 'findOne'>
+    Pick<
+      Repository<GameRoomParticipantEntity>,
+      'count' | 'create' | 'save' | 'find' | 'findOne'
+    >
   >;
   let roomRepository: jest.Mocked<Pick<Repository<GameRoomEntity>, 'findOne'>>;
   let manager: { getRepository: jest.Mock; query: jest.Mock };
@@ -21,6 +24,7 @@ describe('GameRoomParticipantsService', () => {
 
   beforeEach(() => {
     participantRepository = {
+      count: jest.fn(),
       create: jest.fn(),
       save: jest.fn(),
       find: jest.fn(),
@@ -362,5 +366,32 @@ describe('GameRoomParticipantsService', () => {
         code: 'ROOM_NOT_WAITING',
       }),
     });
+  });
+
+  it('marks a joined participant as LEFT on disconnect', async () => {
+    const participant = {
+      id: 'participant-1',
+      userId: 'player-1',
+      gameRoomId: 'room-1',
+      membershipStatus: GameRoomParticipantMembershipStatus.JOINED,
+    } as GameRoomParticipantEntity;
+
+    roomRepository.findOne.mockResolvedValue({
+      id: 'room-1',
+      status: GameRoomStatus.IN_PROGRESS,
+      minParticipants: 2,
+    } as GameRoomEntity);
+    participantRepository.findOne.mockResolvedValue(participant);
+    participantRepository.save.mockImplementation(async (value) => value as GameRoomParticipantEntity);
+    participantRepository.count.mockResolvedValue(1);
+
+    const result = await service.markJoinedParticipantLeftOnDisconnect({
+      gameRoomId: 'room-1',
+      userId: 'player-1',
+    });
+
+    expect(result.membershipChanged).toBe(true);
+    expect(participant.membershipStatus).toBe(GameRoomParticipantMembershipStatus.LEFT);
+    expect(result.joinedParticipantCount).toBe(1);
   });
 });

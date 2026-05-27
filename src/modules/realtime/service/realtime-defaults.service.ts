@@ -1,93 +1,62 @@
-import { Injectable, InternalServerErrorException } from '@nestjs/common';
+import { ConflictException, Injectable, Logger } from '@nestjs/common';
 import { TurnsService } from '@modules/turns/service/turns.service';
 import {
   RealtimeAssistiveMessageRequest,
   RealtimeAssistiveMessageService,
-  RealtimeAuthenticatedUser,
-  RealtimeAuthService,
-  RealtimeDisconnectService,
-  RealtimeJoinRoomState,
-  RealtimeRoomAccessService,
   RealtimeTurnSubmitRequest,
   RealtimeTurnSubmitService,
-  RealtimeTurnEditAuthorization,
-  RealtimeTurnEditService,
 } from './realtime.interfaces';
 import { RealtimeEventSupportService } from './realtime-event-support.service';
 
 @Injectable()
-export class DefaultRealtimeAuthService implements RealtimeAuthService {
-  async validateAccessToken(_accessToken: string): Promise<RealtimeAuthenticatedUser> {
-    throw new InternalServerErrorException('Realtime auth service is not configured');
-  }
-}
-
-@Injectable()
-export class DefaultRealtimeRoomAccessService implements RealtimeRoomAccessService {
-  async getJoinRoomState(_input: {
-    gameRoomId: string;
-    userId: string;
-  }): Promise<RealtimeJoinRoomState> {
-    throw new InternalServerErrorException('Realtime room access service is not configured');
-  }
-}
-
-@Injectable()
-export class DefaultRealtimeDisconnectService implements RealtimeDisconnectService {
-  async handleDisconnect(_input: { gameRoomId: string; userId: string }): Promise<void> {}
-}
-
-@Injectable()
-export class DefaultRealtimeTurnEditService implements RealtimeTurnEditService {
-  async authorizeCodeChange(_input: {
-    gameRoomId: string;
-    userId: string;
-  }): Promise<RealtimeTurnEditAuthorization> {
-    return {
-      isEditable: false,
-      currentTurnId: null,
-      currentTurnUserId: null,
-    };
-  }
-}
-
-@Injectable()
 export class DefaultRealtimeTurnSubmitService implements RealtimeTurnSubmitService {
+  private readonly logger = new Logger(DefaultRealtimeTurnSubmitService.name);
+
   constructor(
     private readonly turnsService: TurnsService,
     private readonly realtimeEventSupportService: RealtimeEventSupportService,
   ) {}
 
   async submitTurn(input: RealtimeTurnSubmitRequest): Promise<void> {
-    const result = await this.turnsService.submitTurn({
-      gameRoomId: input.gameRoomId,
-      turnId: input.turnId,
-      userId: input.userId,
-      occurredAt: input.occurredAt,
-      files: input.files,
-    });
+    try {
+      const result = await this.turnsService.submitTurn({
+        gameRoomId: input.gameRoomId,
+        turnId: input.turnId,
+        userId: input.userId,
+        occurredAt: input.occurredAt,
+        files: input.files,
+      });
 
-    this.realtimeEventSupportService.publishTurnSubmit(result.submitEvent);
-    await this.realtimeEventSupportService.publishTurnEvaluated(
-      result.evaluatedEvent,
-    );
+      await this.realtimeEventSupportService.publishTurnLifecycleResult(result);
+    } catch (error) {
+      if (
+        error instanceof ConflictException &&
+        getConflictCode(error) === 'TURN_NOT_IN_PROGRESS'
+      ) {
+        return;
+      }
 
-    if (result.turnChangedEvent) {
-      await this.realtimeEventSupportService.publishTurnChanged(
-        result.turnChangedEvent,
-      );
+      if (error instanceof ConflictException) {
+        const code = getConflictCode(error) ?? 'UNKNOWN_CONFLICT';
+        this.logger.warn(
+          `Turn submit conflict for room ${input.gameRoomId}, turn ${input.turnId}: ${code}`,
+        );
+      }
+
+      throw error;
     }
-
-    if (result.missionResultEvent) {
-      await this.realtimeEventSupportService.publishMissionResult(
-        result.missionResultEvent,
-      );
-    }
-
-    await this.realtimeEventSupportService.publishGameStateUpdated(
-      result.gameStateUpdatedEvent,
-    );
   }
+}
+
+function getConflictCode(error: ConflictException): string | undefined {
+  const response = error.getResponse();
+
+  if (typeof response === 'object' && response !== null && 'code' in response) {
+    const code = (response as { code?: unknown }).code;
+    return typeof code === 'string' ? code : undefined;
+  }
+
+  return undefined;
 }
 
 @Injectable()

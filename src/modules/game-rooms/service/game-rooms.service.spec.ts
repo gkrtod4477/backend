@@ -389,4 +389,24 @@ describe('GameRoomsService', () => {
       }),
     });
   });
+
+  it('finishes the room when joined participants fall below minParticipants', async () => {
+    roomRepository.findOne.mockResolvedValue({
+      id: 'room-1',
+      status: GameRoomStatus.IN_PROGRESS,
+      minParticipants: 2,
+    } as GameRoomEntity);
+    participantRepository.count.mockResolvedValue(1);
+    roomRepository.save.mockImplementation(async (room) => room as GameRoomEntity);
+
+    const result = await service.finishRoomIfBelowMinParticipants('room-1');
+
+    expect(result.finished).toBe(true);
+    expect(roomRepository.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'room-1',
+        status: GameRoomStatus.FINISHED,
+      }),
+    );
+  });
 });

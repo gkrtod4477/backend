@@ -53,20 +53,9 @@ describe('RealtimeTurnTimeoutService', () => {
       }),
     };
     const realtimeEventSupportService: jest.Mocked<
-      Pick<
-        RealtimeEventSupportService,
-        | 'publishTurnSubmit'
-        | 'publishTurnEvaluated'
-        | 'publishTurnChanged'
-        | 'publishMissionResult'
-        | 'publishGameStateUpdated'
-      >
+      Pick<RealtimeEventSupportService, 'publishTurnLifecycleResult'>
     > = {
-      publishTurnSubmit: jest.fn(),
-      publishTurnEvaluated: jest.fn().mockResolvedValue(undefined),
-      publishTurnChanged: jest.fn().mockResolvedValue(undefined),
-      publishMissionResult: jest.fn().mockResolvedValue(undefined),
-      publishGameStateUpdated: jest.fn().mockResolvedValue(undefined),
+      publishTurnLifecycleResult: jest.fn().mockResolvedValue(undefined),
     };
     const supportStateStore: jest.Mocked<RealtimeSupportStateStore> = {
       saveCurrentTurnState: jest.fn(),
@@ -109,8 +98,6 @@ describe('RealtimeTurnTimeoutService', () => {
         }),
       ],
     });
-    expect(realtimeEventSupportService.publishTurnSubmit).toHaveBeenCalled();
-    expect(realtimeEventSupportService.publishTurnEvaluated).toHaveBeenCalled();
-    expect(realtimeEventSupportService.publishGameStateUpdated).toHaveBeenCalled();
+    expect(realtimeEventSupportService.publishTurnLifecycleResult).toHaveBeenCalled();
   });
 });

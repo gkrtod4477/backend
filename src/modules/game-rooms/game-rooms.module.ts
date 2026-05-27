@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { forwardRef, Module } from '@nestjs/common';
 import { AuthenticatedRequestGuard } from '@common/guards/authenticated-request.guard';
 import { GameRoomMissionsModule } from '@modules/game-room-missions/game-room-missions.module';
 import { RealtimeModule } from '@modules/realtime/realtime.module';
@@ -13,7 +13,7 @@ import { GameRoomsService } from './service/game-rooms.service';
  * To be implemented by Worker 2.
  */
 @Module({
-  imports: [GameRoomMissionsModule, TurnsModule, RealtimeModule],
+  imports: [GameRoomMissionsModule, TurnsModule, forwardRef(() => RealtimeModule)],
   controllers: [GameRoomsController],
   providers: [AuthenticatedRequestGuard, GameRoomsService, GameStartFlowService],
   exports: [GameRoomsService, GameStartFlowService],

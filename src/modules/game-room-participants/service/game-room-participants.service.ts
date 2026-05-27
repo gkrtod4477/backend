@@ -35,6 +35,13 @@ interface LeaveRoomInput {
   participantId: string;
 }
 
+export interface DisconnectMembershipResult {
+  participant: GameRoomParticipantEntity;
+  room: GameRoomEntity;
+  membershipChanged: boolean;
+  joinedParticipantCount: number;
+}
+
 const WAITING_MEMBERSHIP_STATUSES = [
   GameRoomParticipantMembershipStatus.INVITED,
   GameRoomParticipantMembershipStatus.JOINED,
@@ -241,6 +248,57 @@ export class GameRoomParticipantsService {
       participant.membershipStatus = GameRoomParticipantMembershipStatus.DENIED;
 
       return participantRepository.save(participant);
+    });
+  }
+
+  async markJoinedParticipantLeftOnDisconnect(input: {
+    gameRoomId: string;
+    userId: string;
+  }): Promise<DisconnectMembershipResult> {
+    return this.dataSource.transaction(async (manager) => {
+      const participantRepository = manager.getRepository(GameRoomParticipantEntity);
+      const gameRoomRepository = manager.getRepository(GameRoomEntity);
+
+      await this.acquireRoomLifecycleLock(manager, input.gameRoomId);
+
+      const room = await this.getRoomOrThrow(gameRoomRepository, input.gameRoomId);
+      const participant = await participantRepository.findOne({
+        where: {
+          gameRoomId: input.gameRoomId,
+          userId: input.userId,
+        },
+      });
+
+      if (!participant) {
+        throw new NotFoundException({
+          code: 'GAME_ROOM_PARTICIPANT_NOT_FOUND',
+          message: 'Game room participant was not found.',
+        });
+      }
+
+      let membershipChanged = false;
+
+      if (
+        participant.membershipStatus === GameRoomParticipantMembershipStatus.JOINED
+      ) {
+        participant.membershipStatus = GameRoomParticipantMembershipStatus.LEFT;
+        await participantRepository.save(participant);
+        membershipChanged = true;
+      }
+
+      const joinedParticipantCount = await participantRepository.count({
+        where: {
+          gameRoomId: input.gameRoomId,
+          membershipStatus: GameRoomParticipantMembershipStatus.JOINED,
+        },
+      });
+
+      return {
+        participant,
+        room,
+        membershipChanged,
+        joinedParticipantCount,
+      };
     });
   }
 

@@ -6,6 +6,7 @@ import {
   REALTIME_EVENT,
   REALTIME_SUPPORT_STATE_STORE,
 } from './realtime.constants';
+import type { TurnLifecycleResult } from '@modules/turns/service/turns.service';
 import type {
   GameStartedEvent,
   GameStateUpdatedEvent,
@@ -13,6 +14,7 @@ import type {
   RealtimeAssistiveMessageService,
   RealtimeAssistiveNotice,
   RealtimeSupportStateStore,
+  RoomParticipantsUpdatedEvent,
   TurnChangedEvent,
   TurnEvaluatedEvent,
   TurnSubmitEvent,
@@ -32,6 +34,34 @@ export class RealtimeEventSupportService {
 
   publishTurnSubmit(event: TurnSubmitEvent): void {
     this.realtimeGateway.emitToRoom(event.gameRoomId, REALTIME_EVENT.TURN_SUBMIT, event);
+  }
+
+  publishRoomParticipantsUpdated(event: RoomParticipantsUpdatedEvent): void {
+    this.realtimeGateway.emitToRoom(
+      event.gameRoomId,
+      REALTIME_EVENT.ROOM_PARTICIPANTS_UPDATED,
+      event,
+    );
+  }
+
+  async publishTurnLifecycleResult(
+    result: TurnLifecycleResult,
+    options?: { omitGameStateUpdated?: boolean },
+  ): Promise<void> {
+    this.publishTurnSubmit(result.submitEvent);
+    await this.publishTurnEvaluated(result.evaluatedEvent);
+
+    if (result.turnChangedEvent) {
+      await this.publishTurnChanged(result.turnChangedEvent);
+    }
+
+    if (result.missionResultEvent) {
+      await this.publishMissionResult(result.missionResultEvent);
+    }
+
+    if (!options?.omitGameStateUpdated) {
+      await this.publishGameStateUpdated(result.gameStateUpdatedEvent);
+    }
   }
 
   async publishGameStarted(event: GameStartedEvent): Promise<void> {

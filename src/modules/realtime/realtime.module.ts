@@ -1,16 +1,19 @@
-import { Module } from '@nestjs/common';
+import { forwardRef, Module } from '@nestjs/common';
 import { RedisIntegrationModule } from '../../integrations/redis/redis.module';
 import { WebsocketIntegrationModule } from '../../integrations/websocket/websocket.module';
+import { GameRoomParticipantsModule } from '../game-room-participants/game-room-participants.module';
+import { GameRoomsModule } from '../game-rooms/game-rooms.module';
 import { TurnsModule } from '../turns/turns.module';
 import { RealtimeGateway } from './gateway/realtime.gateway';
 import {
-  DefaultRealtimeAuthService,
   DefaultRealtimeAssistiveMessageService,
-  DefaultRealtimeDisconnectService,
-  DefaultRealtimeRoomAccessService,
   DefaultRealtimeTurnSubmitService,
-  DefaultRealtimeTurnEditService,
 } from './service/realtime-defaults.service';
+import { JwtRealtimeAuthService } from './service/realtime-auth.service';
+import { DatabaseRealtimeDisconnectService } from './service/realtime-disconnect.service';
+import { DatabaseRealtimeRoomAccessService } from './service/realtime-room-access.service';
+import { RealtimeRoomStateService } from './service/realtime-room-state.service';
+import { DatabaseRealtimeTurnEditService } from './service/realtime-turn-edit.service';
 import { RealtimeTurnTimeoutService } from './service/realtime-turn-timeout.service';
 import {
   REALTIME_ASSISTIVE_MESSAGE_SERVICE,
@@ -26,35 +29,41 @@ import { RealtimeEventSupportService } from './service/realtime-event-support.se
  * Responsibilities: establish WebSocket connections, authenticate join-room,
  * relay code changes/submissions/state broadcasts, return latest state on join.
  * Rule: the gateway never decides authoritative state directly.
- * To be implemented by Worker 3.
  */
 @Module({
-  imports: [WebsocketIntegrationModule, RedisIntegrationModule, TurnsModule],
+  imports: [
+    WebsocketIntegrationModule,
+    RedisIntegrationModule,
+    TurnsModule,
+    GameRoomParticipantsModule,
+    forwardRef(() => GameRoomsModule),
+  ],
   providers: [
     RealtimeGateway,
-    DefaultRealtimeAuthService,
-    DefaultRealtimeRoomAccessService,
-    DefaultRealtimeDisconnectService,
-    DefaultRealtimeTurnEditService,
+    RealtimeRoomStateService,
+    JwtRealtimeAuthService,
+    DatabaseRealtimeRoomAccessService,
+    DatabaseRealtimeDisconnectService,
+    DatabaseRealtimeTurnEditService,
     DefaultRealtimeTurnSubmitService,
     DefaultRealtimeAssistiveMessageService,
     RealtimeEventSupportService,
     RealtimeTurnTimeoutService,
     {
       provide: REALTIME_AUTH_SERVICE,
-      useExisting: DefaultRealtimeAuthService,
+      useExisting: JwtRealtimeAuthService,
     },
     {
       provide: REALTIME_ROOM_ACCESS_SERVICE,
-      useExisting: DefaultRealtimeRoomAccessService,
+      useExisting: DatabaseRealtimeRoomAccessService,
     },
     {
       provide: REALTIME_DISCONNECT_SERVICE,
-      useExisting: DefaultRealtimeDisconnectService,
+      useExisting: DatabaseRealtimeDisconnectService,
     },
     {
       provide: REALTIME_TURN_EDIT_SERVICE,
-      useExisting: DefaultRealtimeTurnEditService,
+      useExisting: DatabaseRealtimeTurnEditService,
     },
     {
       provide: REALTIME_TURN_SUBMIT_SERVICE,
@@ -73,6 +82,7 @@ import { RealtimeEventSupportService } from './service/realtime-event-support.se
     REALTIME_TURN_SUBMIT_SERVICE,
     REALTIME_ASSISTIVE_MESSAGE_SERVICE,
     RealtimeEventSupportService,
+    RealtimeRoomStateService,
   ],
 })
 export class RealtimeModule {}

@@ -106,6 +106,48 @@ export class GameRoomsService {
     });
   }
 
+  async finishRoomIfBelowMinParticipants(gameRoomId: string): Promise<{
+    finished: boolean;
+    room: GameRoomEntity;
+  }> {
+    return this.dataSource.transaction(async (manager) => {
+      await this.acquireRoomLifecycleLock(manager, gameRoomId);
+
+      const roomRepository = manager.getRepository(GameRoomEntity);
+      const participantRepository = manager.getRepository(GameRoomParticipantEntity);
+      const room = await this.getRoomOrThrow(roomRepository, gameRoomId);
+
+      if (room.status !== GameRoomStatus.IN_PROGRESS) {
+        return {
+          finished: false,
+          room,
+        };
+      }
+
+      const joinedParticipantCount = await participantRepository.count({
+        where: {
+          gameRoomId,
+          membershipStatus: GameRoomParticipantMembershipStatus.JOINED,
+        },
+      });
+
+      if (joinedParticipantCount >= room.minParticipants) {
+        return {
+          finished: false,
+          room,
+        };
+      }
+
+      room.status = GameRoomStatus.FINISHED;
+      const savedRoom = await roomRepository.save(room);
+
+      return {
+        finished: true,
+        room: savedRoom,
+      };
+    });
+  }
+
   async startGame(input: StartGameInput): Promise<StartGameResult> {
     return this.dataSource.transaction(async (manager) => {
       await this.acquireRoomLifecycleLock(manager, input.gameRoomId);

@@ -73,26 +73,7 @@ export class RealtimeTurnTimeoutService
           files,
         });
 
-        this.realtimeEventSupportService.publishTurnSubmit(result.submitEvent);
-        await this.realtimeEventSupportService.publishTurnEvaluated(
-          result.evaluatedEvent,
-        );
-
-        if (result.turnChangedEvent) {
-          await this.realtimeEventSupportService.publishTurnChanged(
-            result.turnChangedEvent,
-          );
-        }
-
-        if (result.missionResultEvent) {
-          await this.realtimeEventSupportService.publishMissionResult(
-            result.missionResultEvent,
-          );
-        }
-
-        await this.realtimeEventSupportService.publishGameStateUpdated(
-          result.gameStateUpdatedEvent,
-        );
+        await this.realtimeEventSupportService.publishTurnLifecycleResult(result);
       } catch (error) {
         const message =
           error instanceof Error ? error.message : 'unknown timeout sweep error';

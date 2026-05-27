@@ -47,6 +47,11 @@ export interface SubmitTurnLifecycleInput {
   userId: string;
   occurredAt: string;
   files: RealtimeFileContentBuffer[];
+  /**
+   * When true, closes the current turn but never creates the next turn.
+   * Used when disconnect will terminate the room for insufficient participants.
+   */
+  suppressNextTurnCreation?: boolean;
 }
 
 export interface TimeoutTurnLifecycleInput extends SubmitTurnLifecycleInput {}
@@ -66,6 +71,7 @@ interface PreparedTurnEndState {
   turn: TurnEntity;
   snapshot: TurnSnapshotEntity;
   occurredAt: Date;
+  suppressNextTurnCreation: boolean;
 }
 
 interface SnapshotFile {
@@ -211,6 +217,7 @@ export class TurnsService {
         turn,
         snapshot: savedSnapshot,
         occurredAt,
+        suppressNextTurnCreation: input.suppressNextTurnCreation ?? false,
       };
     });
   }
@@ -290,6 +297,7 @@ export class TurnsService {
         execution: input.execution,
         snapshot: input.preparedState.snapshot,
         occurredAt: input.preparedState.occurredAt,
+        suppressNextTurnCreation: input.preparedState.suppressNextTurnCreation,
       });
 
       return buildLifecycleEvents({
@@ -306,6 +314,7 @@ export class TurnsService {
         snapshotFiles: input.preparedState.snapshot.codeSnapshotJson.files,
         submittedStatus: input.submittedStatus,
         missionFinished: nextState.missionFinished,
+        suppressNextTurnCreation: input.preparedState.suppressNextTurnCreation,
       });
     });
   }
@@ -319,6 +328,7 @@ export class TurnsService {
     execution: ExecutionEntity;
     snapshot: TurnSnapshotEntity;
     occurredAt: Date;
+    suppressNextTurnCreation: boolean;
   }): Promise<{
     room: GameRoomEntity;
     mission: GameRoomMissionEntity;
@@ -350,14 +360,14 @@ export class TurnsService {
       missionFinished = completed.missionFinished;
       strikeCount = mission.strikeCount;
 
-      if (!missionFinished && currentStep) {
+      if (!missionFinished && currentStep && !input.suppressNextTurnCreation) {
         currentStep =
           await this.gameRoomMissionsService.transitionCurrentStepToInProgress({
             manager: input.manager,
             gameRoomMissionId: mission.id,
           });
         nextTurn = await this.createNextTurn(input.manager, room, mission, input.turn);
-      } else {
+      } else if (missionFinished) {
         room.status = GameRoomStatus.FINISHED;
         room = await roomRepository.save(room);
       }
@@ -372,7 +382,7 @@ export class TurnsService {
       missionFinished = failedAttempt.missionFinished;
       strikeCount = mission.strikeCount;
 
-      if (!missionFinished) {
+      if (!missionFinished && !input.suppressNextTurnCreation) {
         if (currentStep.status === GameRoomMissionStepStatus.READY) {
           currentStep =
             await this.gameRoomMissionsService.transitionCurrentStepToInProgress({
@@ -381,7 +391,7 @@ export class TurnsService {
             });
         }
         nextTurn = await this.createNextTurn(input.manager, room, mission, input.turn);
-      } else {
+      } else if (missionFinished) {
         room.status = GameRoomStatus.FINISHED;
         room = await roomRepository.save(room);
       }
@@ -577,6 +587,7 @@ function buildLifecycleEvents(input: {
   snapshotFiles: SnapshotFile[];
   submittedStatus: TurnStatus.SUBMITTED | TurnStatus.TIMEOUT;
   missionFinished: boolean;
+  suppressNextTurnCreation: boolean;
 }): TurnLifecycleResult {
   const occurredAt = toSeoulIso(input.occurredAt);
   const missionState = buildMissionState({
@@ -585,8 +596,12 @@ function buildLifecycleEvents(input: {
     currentStep: input.currentStep,
     snapshotFiles: input.snapshotFiles,
   });
+  const roomForGameState =
+    input.suppressNextTurnCreation && input.room.status !== GameRoomStatus.FINISHED
+      ? { ...input.room, status: GameRoomStatus.FINISHED }
+      : input.room;
   const gameState = buildGameState({
-    room: input.room,
+    room: roomForGameState,
     mission: input.mission,
     currentTurn: input.nextTurn,
   });
