@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { AuthenticatedRequestGuard } from '@common/guards/authenticated-request.guard';
 import { GameRoomMissionsController } from './controller/game-room-missions.controller';
 import { GameRoomMissionsService } from './service/game-room-missions.service';
+import { MissionSeedService } from './service/mission-seed.service';
 
 /**
  * Responsibilities: create mission instances on game start, track current step,
@@ -10,7 +11,7 @@ import { GameRoomMissionsService } from './service/game-room-missions.service';
  */
 @Module({
   controllers: [GameRoomMissionsController],
-  providers: [AuthenticatedRequestGuard, GameRoomMissionsService],
+  providers: [AuthenticatedRequestGuard, GameRoomMissionsService, MissionSeedService],
   exports: [GameRoomMissionsService],
 })
 export class GameRoomMissionsModule {}
