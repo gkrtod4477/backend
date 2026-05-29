@@ -104,7 +104,7 @@ describe('GameRoomMissionsService', () => {
     missionTemplateRepository.findOne.mockResolvedValue({
       id: 'template-1',
       difficulty: 'EASY',
-    } as MissionTemplateEntity);
+    } as unknown as MissionTemplateEntity);
     missionTemplateStepRepository.find.mockResolvedValue([
       {
         id: 'template-step-1',
@@ -127,14 +127,20 @@ describe('GameRoomMissionsService', () => {
     gameRoomMissionRepository.findOne.mockResolvedValue(null);
     missionTemplateRepository.findOne.mockResolvedValue({
       id: 'template-1',
+      title: 'Calculator',
+      description: 'Build a calculator.',
+      language: 'python',
       difficulty: 'EASY',
+      defaultTimeLimitSeconds: 300,
+      defaultMaxStrikeCount: 3,
       dockerImageId: 'docker-image-1',
+      successCriteria: 'All calculator steps pass.',
       judgePolicyJson: { judge: 'strict' },
       projectStructureJson: { files: [{ filePath: 'src/app.ts' }] },
       steps: [],
       createdAt: new Date(),
       updatedAt: new Date(),
-    } as MissionTemplateEntity);
+    } as unknown as MissionTemplateEntity);
     missionTemplateStepRepository.find.mockResolvedValue([
       {
         id: 'template-step-1',
@@ -219,14 +225,20 @@ describe('GameRoomMissionsService', () => {
     gameRoomMissionRepository.findOne.mockResolvedValue(null);
     missionTemplateRepository.findOne.mockResolvedValue({
       id: 'template-1',
+      title: 'Calculator',
+      description: 'Build a calculator.',
+      language: 'python',
       difficulty: 'HARD',
+      defaultTimeLimitSeconds: 300,
+      defaultMaxStrikeCount: 3,
       dockerImageId: 'docker-image-1',
+      successCriteria: 'All calculator steps pass.',
       judgePolicyJson: {},
       projectStructureJson: {},
       steps: [],
       createdAt: new Date(),
       updatedAt: new Date(),
-    } as MissionTemplateEntity);
+    } as unknown as MissionTemplateEntity);
 
     await expect(
       service.createMissionForGameStart({
@@ -247,14 +259,20 @@ describe('GameRoomMissionsService', () => {
     gameRoomMissionRepository.findOne.mockResolvedValue(null);
     missionTemplateRepository.findOne.mockResolvedValue({
       id: 'template-1',
+      title: 'Calculator',
+      description: 'Build a calculator.',
+      language: 'python',
       difficulty: 'EASY',
+      defaultTimeLimitSeconds: 300,
+      defaultMaxStrikeCount: 3,
       dockerImageId: 'docker-image-1',
+      successCriteria: 'All calculator steps pass.',
       judgePolicyJson: {},
       projectStructureJson: {},
       steps: [],
       createdAt: new Date(),
       updatedAt: new Date(),
-    } as MissionTemplateEntity);
+    } as unknown as MissionTemplateEntity);
     missionTemplateStepRepository.find.mockResolvedValue([]);
 
     await expect(
