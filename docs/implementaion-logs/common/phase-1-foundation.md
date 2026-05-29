@@ -238,7 +238,7 @@
 - [ ] Full `pnpm lint` — 기존 범위 밖 이슈로 실패: `src/modules/realtime/service/realtime-room-state.service.ts` unused import, `src/modules/turns/service/turns.service.ts` empty interface 및 unused helper
 
 **Commit:**
-- `pending` Task 1 전용 커밋은 이 로그와 함께 생성 예정
+- `83c0c45` feat(mission): 계산기 미션 메타데이터 스키마 추가
 
 **Impact on next tasks:**
 - Task 2는 `docker_images`, `mission_templates`, `mission_template_steps` seed를 새 메타데이터 필드에 맞춰 작성할 수 있습니다.
