@@ -31,6 +31,13 @@ import type {
   TurnEvaluatedEvent,
   TurnSubmitEvent,
 } from '@modules/realtime/service/realtime.interfaces';
+import {
+  buildPublicCaseFailureMessage,
+  resolveFirstFailedPublicCase,
+  resolveStepPublicTestCases,
+  runStepPublicCaseJudging,
+  type PublicTestCaseJudgeDetail,
+} from '../judge/step-public-case-judge';
 import { TurnSnapshotEntity } from '../entity/turn-snapshot.entity';
 import { TurnEntity } from '../entity/turn.entity';
 
@@ -78,6 +85,12 @@ interface SnapshotFile {
   filePath: string;
   content: string;
   occurredAt?: string;
+}
+
+interface SnapshotExecutionOutcome {
+  execution: ExecutionEntity;
+  judgeStatus: MissionResultJudgeStatus;
+  publicCaseResults: PublicTestCaseJudgeDetail[] | null;
 }
 
 @Injectable()
@@ -145,11 +158,11 @@ export class TurnsService {
     trigger: TurnStatus.SUBMITTED | TurnStatus.TIMEOUT;
   }): Promise<TurnLifecycleResult> {
     const preparedState = await this.prepareTurnEndState(input);
-    const execution = await this.executeSnapshot(preparedState);
+    const executionOutcome = await this.executeSnapshot(preparedState);
 
     return this.applyExecutionOutcome({
       preparedState,
-      execution,
+      executionOutcome,
       submittedStatus: input.trigger,
     });
   }
@@ -224,7 +237,7 @@ export class TurnsService {
 
   private async executeSnapshot(
     preparedState: PreparedTurnEndState,
-  ): Promise<ExecutionEntity> {
+  ): Promise<SnapshotExecutionOutcome> {
     const projectStructure = asRecord(preparedState.mission.projectStructureJson);
     const judgePolicy = asRecord(preparedState.mission.judgePolicyJson);
     const snapshotFiles = preparedState.snapshot.codeSnapshotJson.files;
@@ -245,8 +258,7 @@ export class TurnsService {
         inferLanguageFromProjectStructure(projectStructure) ??
         inferLanguageFromPath(runtimeFilePath),
     });
-
-    return this.executionsService.executeTurnCode({
+    const executionInput = {
       gameRoomId: preparedState.room.id,
       missionId: preparedState.mission.id,
       turnId: preparedState.turn.id,
@@ -257,12 +269,39 @@ export class TurnsService {
       content: selectedFile?.content ?? '',
       timeoutMs:
         this.configService.get<number>('runtime.executionTimeoutMs') ?? undefined,
-    });
+    };
+    const publicTestCases = resolveStepPublicTestCases(
+      judgePolicy,
+      preparedState.currentStep.stepOrder,
+    );
+
+    if (publicTestCases === null) {
+      const execution = await this.executionsService.executeTurnCode(executionInput);
+
+      return {
+        execution,
+        judgeStatus: determineJudgeStatus(execution),
+        publicCaseResults: null,
+      };
+    }
+
+    const judgedOutcome = await runStepPublicCaseJudging(publicTestCases, (testCase) =>
+      this.executionsService.executeTurnCode({
+        ...executionInput,
+        stdinLines: testCase.stdinLines,
+      }),
+    );
+
+    return {
+      execution: judgedOutcome.representativeExecution,
+      judgeStatus: judgedOutcome.judgeStatus,
+      publicCaseResults: judgedOutcome.caseResults,
+    };
   }
 
   private async applyExecutionOutcome(input: {
     preparedState: PreparedTurnEndState;
-    execution: ExecutionEntity;
+    executionOutcome: SnapshotExecutionOutcome;
     submittedStatus: TurnStatus.SUBMITTED | TurnStatus.TIMEOUT;
   }): Promise<TurnLifecycleResult> {
     return this.dataSource.transaction(async (manager) => {
@@ -294,7 +333,9 @@ export class TurnsService {
         mission,
         currentStep,
         turn,
-        execution: input.execution,
+        execution: input.executionOutcome.execution,
+        judgeStatus: input.executionOutcome.judgeStatus,
+        publicCaseResults: input.executionOutcome.publicCaseResults,
         snapshot: input.preparedState.snapshot,
         occurredAt: input.preparedState.occurredAt,
         suppressNextTurnCreation: input.preparedState.suppressNextTurnCreation,
@@ -305,7 +346,7 @@ export class TurnsService {
         mission: nextState.mission,
         currentStep: nextState.currentStep,
         evaluatedTurn: turn,
-        execution: input.execution,
+        execution: input.executionOutcome.execution,
         missionResultPayload: nextState.missionResultPayload,
         judgeStatus: nextState.judgeStatus,
         occurredAt: input.preparedState.occurredAt,
@@ -326,6 +367,8 @@ export class TurnsService {
     currentStep: GameRoomMissionStepEntity;
     turn: TurnEntity;
     execution: ExecutionEntity;
+    judgeStatus: MissionResultJudgeStatus;
+    publicCaseResults: PublicTestCaseJudgeDetail[] | null;
     snapshot: TurnSnapshotEntity;
     occurredAt: Date;
     suppressNextTurnCreation: boolean;
@@ -341,7 +384,7 @@ export class TurnsService {
     const roomRepository = input.manager.getRepository(GameRoomEntity);
     const missionRepository = input.manager.getRepository(GameRoomMissionEntity);
 
-    const judgeStatus = determineJudgeStatus(input.execution);
+    const judgeStatus = input.judgeStatus;
     let room = input.room;
     let mission = input.mission;
     let currentStep: GameRoomMissionStepEntity | null = input.currentStep;
@@ -402,6 +445,7 @@ export class TurnsService {
     const missionResultPayload = buildMissionResultPayload({
       judgeStatus,
       execution: input.execution,
+      publicCaseResults: input.publicCaseResults,
       room,
       mission,
       turn: input.turn,
@@ -665,6 +709,7 @@ function buildLifecycleEvents(input: {
 function buildMissionResultPayload(input: {
   judgeStatus: MissionResultJudgeStatus;
   execution: ExecutionEntity;
+  publicCaseResults: PublicTestCaseJudgeDetail[] | null;
   room: GameRoomEntity;
   mission: GameRoomMissionEntity;
   turn: TurnEntity;
@@ -698,6 +743,7 @@ function buildMissionResultPayload(input: {
       runtimeFailureCode: input.execution.runtimeFailureCode,
       runtimeFailureMessage: input.execution.runtimeFailureMessage,
     },
+    publicCaseResults: input.publicCaseResults,
     detectedIssues:
       input.judgeStatus === MissionResultJudgeStatus.PASSED
         ? []
@@ -707,15 +753,42 @@ function buildMissionResultPayload(input: {
                 input.judgeStatus === MissionResultJudgeStatus.ERROR
                   ? 'RUNTIME_ERROR'
                   : 'EXECUTION_FAILED',
-              message:
-                input.execution.runtimeFailureMessage ??
-                input.execution.stderr ??
-                '판정에 실패했습니다.',
+              message: resolveDetectedIssueMessage({
+                judgeStatus: input.judgeStatus,
+                execution: input.execution,
+                publicCaseResults: input.publicCaseResults,
+              }),
               filePath:
                 input.currentStep?.missionTemplateStep.targetFilePath ?? null,
             },
           ],
   };
+}
+
+function resolveDetectedIssueMessage(input: {
+  judgeStatus: MissionResultJudgeStatus;
+  execution: ExecutionEntity;
+  publicCaseResults: PublicTestCaseJudgeDetail[] | null;
+}): string {
+  const runtimeFailureMessage = input.execution.runtimeFailureMessage?.trim();
+
+  if (runtimeFailureMessage) {
+    return runtimeFailureMessage;
+  }
+
+  const stderr = input.execution.stderr?.trim();
+
+  if (stderr) {
+    return stderr;
+  }
+
+  const firstFailedCase = resolveFirstFailedPublicCase(input.publicCaseResults);
+
+  if (firstFailedCase) {
+    return buildPublicCaseFailureMessage(firstFailedCase);
+  }
+
+  return '판정에 실패했습니다.';
 }
 
 function buildGameState(input: {
