@@ -267,3 +267,71 @@
 - Read `database/seeds/docker_images.json` and the Task 2 log before extending runtime execution for stdin.
 - Reuse `game_room_missions.container_id` from the live mission; do not prepare a second container per turn.
 - Preserve `releasePreparedRuntimeContainer()` semantics when touching game start; any new failure path after container preparation must participate in the same cleanup contract.
+
+## [2026-05-30] Task 4: Extend runtime execution to support stdin-driven console cases
+
+**Plan reference:** `docs/plans/calculator-mission-template-runtime-judging-plan.md`
+
+**Summary:**
+- `stdinLines`를 newline으로 결합한 stdin 페이로드(`formatStdinFromLines`)를 런타임 실행 계약에 추가했습니다.
+- `DockerRuntimeAdapter.executeMissionCode()`는 stdin이 있을 때만 `docker exec -i`로 프로세스에 stdin을 전달하고, 없으면 기존 비대화형 `docker exec` 경로를 유지합니다.
+- `ExecutionsService.executeTurnCode()`가 `stdinLines`를 런타임 어댑터까지 전달하며, stdout·stderr·exit code·runtime failure 메타데이터 저장 동작은 그대로입니다.
+
+**Dependencies reviewed before starting:**
+- `docs/plans/calculator-mission-template-runtime-judging-plan.md` — Task 4 acceptance criteria
+- `docs/implementaion-logs/README.md` — logging contract
+- `docs/implementaion-logs/common/phase-2-integration.md` — Task 3 handoff
+- `docs/implementaion-logs/common/phase-1-foundation.md` — `judgePolicyJson.steps[].testCases[].stdinLines` seed contract
+- `docs/specs/07-integrations-and-ai.md` — execution-only runtime boundary
+
+**Implementation details:**
+- `ExecuteMissionCodeInput.stdinLines`와 `formatStdinFromLines()`를 `runtime.interfaces.ts`에 정의해 calculator 시드의 line-by-line `input()` 흐름과 맞췄습니다.
+- 파일 주입(write)은 기존처럼 `docker exec -i` + content stdin을 사용하고, 프로세스 실행 단계에서만 testcase stdin을 추가로 전달합니다.
+- `ExecutionsService.StartExecutionInput.stdinLines`를 `executeMissionCode()`에 그대로 포워딩해 Task 5 judge helper가 동일 room-mission 컨테이너에서 case별 stdin 실행을 호출할 수 있게 했습니다.
+- 판정(`PASSED`/`FAILED`/`ERROR`)이나 strike/step 전이는 이 task 범위 밖이며, 런타임은 실행 결과만 반환합니다.
+
+**Files changed:**
+- `src/integrations/runtime/runtime.interfaces.ts`
+- `src/integrations/runtime/runtime-defaults.service.ts`
+- `src/integrations/runtime/runtime-defaults.service.spec.ts`
+- `src/modules/executions/service/executions.service.ts`
+- `src/modules/executions/service/executions.service.spec.ts`
+- `docs/implementaion-logs/common/phase-2-integration.md`
+
+**Verification:**
+- [x] `pnpm test -- src/integrations/runtime/runtime-defaults.service.spec.ts`
+- [x] `pnpm test -- src/modules/executions/service/executions.service.spec.ts`
+- [x] `pnpm typecheck`
+- [x] Subagent review — 구현 결함 없음 확인
+
+**Commit:**
+- `391fc1c` feat(runtime): stdin 기반 콘솔 실행 지원
+
+**Impact on next tasks:**
+- Task 5 can call `ExecutionsService.executeTurnCode({ stdinLines })` per public case inside the existing `game_room_missions.container_id` without a second container-preparation path.
+- Task 5 should compare `stdout.trim()` to `expectedStdout`, require empty stderr and exit code 0 for pass, and keep all case comparison logic outside `integrations/runtime`.
+
+**Design decisions made:**
+- stdin 변환은 runtime 계층(`formatStdinFromLines`)에 두어 judge/turn 계층이 Docker CLI 세부사항을 알 필요 없게 했습니다.
+- `docker exec -i`는 `stdinLines`가 있을 때만 사용해 stdin이 필요 없는 미션의 기존 실행 경로를 보존했습니다.
+
+**Deviations from spec:**
+- None intended. Runtime remains execution-only and does not decide pass or fail.
+
+**Trade-offs:**
+- stdin은 프로세스 실행마다 새 `docker exec`로 전달됩니다. 동일 컨테이너 재사용은 유지되지만 case마다 exec 오버헤드가 있습니다. calculator MVP 범위에서는 허용 가능합니다.
+- `TurnsService`의 기존 turn submit 경로는 아직 `stdinLines`를 넘기지 않습니다. calculator 판정은 Task 5에서 case loop로 명시 호출해야 합니다.
+
+**Open questions:**
+- [x] Should stdin formatting live in runtime or judge layer? → Runtime (`formatStdinFromLines`) so adapters own Docker stdin wiring.
+- [x] Should non-stdin missions keep the previous docker exec args? → Yes. Omit `-i` and `stdin` when `stdinLines` is undefined.
+
+**Open risks or follow-ups:**
+- Task 5 must overwrite the submitted file before each case run to avoid state leakage between repeated executions in one container.
+- Task 5 must not move stdout comparison or strike logic into `integrations/runtime`.
+
+**Instructions for the next worker:**
+- Read `database/seeds/mission_templates.json` and resolve the current step's `judgePolicyJson.steps[].testCases[]` before implementing judging.
+- For each public case, call `executeTurnCode()` (or a thin judge helper wrapping it) with `stdinLines` from the case bundle and the same `containerId` from the live mission.
+- Preserve `stdout.trim()` exact match, empty stderr, and exit code 0 as the pass criteria documented in phase-1-foundation Task 2.
+- Do not add a second container per case; reuse `game_room_missions.container_id` from Task 3.
