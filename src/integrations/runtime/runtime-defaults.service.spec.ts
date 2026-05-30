@@ -179,4 +179,108 @@ describe('DockerRuntimeAdapter', () => {
     });
     expect(runner.run).not.toHaveBeenCalled();
   });
+
+  it('passes stdin derived from stdinLines to the executed process', async () => {
+    const runner = {
+      run: jest
+        .fn()
+        .mockResolvedValueOnce({
+          stdout: '',
+          stderr: '',
+          exitCode: 0,
+          timedOut: false,
+        })
+        .mockResolvedValueOnce({
+          stdout: '5\n',
+          stderr: '',
+          exitCode: 0,
+          timedOut: false,
+        }),
+    };
+
+    const moduleRef = await Test.createTestingModule({
+      imports: [ConfigModule.forRoot({ isGlobal: true, load: [runtimeConfig] })],
+      providers: [
+        DockerRuntimeAdapter,
+        {
+          provide: DockerCliCommandRunner,
+          useValue: runner,
+        },
+      ],
+    }).compile();
+
+    const adapter = moduleRef.get(DockerRuntimeAdapter);
+
+    await expect(
+      adapter.executeMissionCode({
+        containerId: 'container-123',
+        filePath: '/workspace/main.py',
+        content: 'print(1)',
+        command: 'python /workspace/main.py',
+        stdinLines: ['2', '+', '3'],
+      }),
+    ).resolves.toEqual({
+      kind: 'completed',
+      stdout: '5\n',
+      stderr: '',
+      exitCode: 0,
+    });
+
+    expect(runner.run).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        command: 'docker',
+        args: ['exec', '-i', 'container-123', 'sh', '-lc', 'python /workspace/main.py'],
+        stdin: '2\n+\n3\n',
+      }),
+    );
+  });
+
+  it('keeps docker exec non-interactive when stdinLines are omitted', async () => {
+    const runner = {
+      run: jest
+        .fn()
+        .mockResolvedValueOnce({
+          stdout: '',
+          stderr: '',
+          exitCode: 0,
+          timedOut: false,
+        })
+        .mockResolvedValueOnce({
+          stdout: 'ok\n',
+          stderr: '',
+          exitCode: 0,
+          timedOut: false,
+        }),
+    };
+
+    const moduleRef = await Test.createTestingModule({
+      imports: [ConfigModule.forRoot({ isGlobal: true, load: [runtimeConfig] })],
+      providers: [
+        DockerRuntimeAdapter,
+        {
+          provide: DockerCliCommandRunner,
+          useValue: runner,
+        },
+      ],
+    }).compile();
+
+    const adapter = moduleRef.get(DockerRuntimeAdapter);
+
+    await adapter.executeMissionCode({
+      containerId: 'container-123',
+      filePath: '/workspace/main.py',
+      content: 'print("ok")',
+      command: 'python /workspace/main.py',
+    });
+
+    expect(runner.run).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        command: 'docker',
+        args: ['exec', 'container-123', 'sh', '-lc', 'python /workspace/main.py'],
+        stdin: undefined,
+      }),
+    );
+  });
 });

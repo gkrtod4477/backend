@@ -16,6 +16,12 @@ export interface ExecuteMissionCodeInput {
   content: string;
   command: string;
   timeoutMs?: number;
+  /** Console input lines joined with newlines for the executed process. */
+  stdinLines?: string[];
+}
+
+export function formatStdinFromLines(stdinLines: string[]): string {
+  return `${stdinLines.join('\n')}\n`;
 }
 
 export interface RuntimeExecutionCompletedResult {

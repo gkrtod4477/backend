@@ -1,16 +1,17 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { spawn } from 'node:child_process';
-import type {
-  CommandRunnerInput,
-  CommandRunnerResult,
-  ExecuteMissionCodeInput,
-  PrepareMissionContainerInput,
-  RemoveMissionContainerInput,
-  RuntimeAdapter,
-  RuntimeCommandRunner,
-  RuntimeContainerHandle,
-  RuntimeExecutionResult,
+import {
+  formatStdinFromLines,
+  type CommandRunnerInput,
+  type CommandRunnerResult,
+  type ExecuteMissionCodeInput,
+  type PrepareMissionContainerInput,
+  type RemoveMissionContainerInput,
+  type RuntimeAdapter,
+  type RuntimeCommandRunner,
+  type RuntimeContainerHandle,
+  type RuntimeExecutionResult,
 } from './runtime.interfaces';
 
 @Injectable()
@@ -191,9 +192,17 @@ export class DockerRuntimeAdapter implements RuntimeAdapter {
         };
       }
 
+      const stdin =
+        input.stdinLines === undefined ? undefined : formatStdinFromLines(input.stdinLines);
+      const execArgs =
+        stdin === undefined
+          ? ['exec', input.containerId, 'sh', '-lc', input.command]
+          : ['exec', '-i', input.containerId, 'sh', '-lc', input.command];
+
       const execResult = await this.commandRunner.run({
         command: 'docker',
-        args: ['exec', input.containerId, 'sh', '-lc', input.command],
+        args: execArgs,
+        stdin,
         timeoutMs:
           input.timeoutMs ??
           this.configService.get<number>('runtime.executionTimeoutMs') ??
