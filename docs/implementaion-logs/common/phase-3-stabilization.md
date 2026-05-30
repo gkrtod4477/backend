@@ -176,3 +176,76 @@
 - Start Task 6 from `TurnsService.resolveNextState()` and `buildMissionResultPayload()`; reuse `publicCaseResults` instead of re-parsing `judgePolicyJson` at the mission-results layer.
 - Preserve all-case execution and `ERROR` > `FAILED` > `PASSED` aggregation when touching the judge helper.
 - Read `database/seeds/mission_templates.json` step 5–6 cases when adding scenario tests for unsupported operator, divide-by-zero, and invalid-number paths.
+
+---
+
+## [2026-05-30] Task 6: Integrate strike progression, mission-result payloads, and end-to-end calculator scenarios
+
+**Plan reference:** `docs/plans/calculator-mission-template-runtime-judging-plan.md`
+
+**Summary:**
+- 계산기 공개 케이스 판정 결과를 스트라이크 진행·`turn-evaluated` / `mission-result` 페이로드·시나리오 테스트에 연결해 six-step 계산기 슬라이스를 end-to-end로 검증 가능하게 마무리했습니다.
+- `buildTurnEvaluationResultPayload()`로 `stepOrder`, `stepJudgingSummary`, 케이스별 `detectedIssues`, `publicCaseResults`를 한 페이로드에 담아 AI 판정 없이 실패 원인을 설명합니다.
+- 리뷰 반영으로 public-case `ERROR`의 `detectedIssues.message`에 `runtimeFailureMessage` → `stderr` → fallback 순으로 실제 런타임 원인을 포함합니다.
+
+**Dependencies reviewed before starting:**
+- `docs/plans/calculator-mission-template-runtime-judging-plan.md` — Task 6 acceptance criteria
+- `docs/implementaion-logs/README.md` — logging contract
+- `docs/implementaion-logs/common/phase-3-stabilization.md` — Task 5 handoff
+- `docs/implementaion-logs/common/phase-2-integration.md` — runtime stdin·container handoff
+- `docs/specs/06-gameplay-lifecycle.md` — strike, step retention, mission finish
+- `docs/specs/05-api-and-realtime.md` — `turn-evaluated` / `mission-result` event contract
+
+**Implementation details:**
+- `TurnsService.resolveNextState()`는 `FAILED` 시 `recordFailedAttempt()`로 `strikeCount`를 올리고, 스트라이크 한도 도달 시 미션·방을 종료하며 `mission-result`를 방출합니다. `ERROR`는 스트라이크를 올리지 않고 다음 턴을 만들지 않습니다.
+- 미션 결과·`turn-evaluated.evaluationResult` 페이로드는 `buildTurnEvaluationResultPayload()`(mission-results 모듈)에서 생성합니다. 단계 전환 전 `judgedStep`을 기준으로 `stepOrder`·`stepId`를 기록해 통과 직후 다음 스텝으로 바뀌어도 판정 스텝 메타가 어긋나지 않습니다.
+- `PublicTestCaseJudgeDetail`에 `runtimeFailureMessage`를 추가하고, `resolvePublicCaseErrorMessage()`가 per-case `ERROR` 메시지 우선순위를 통일합니다.
+- `spec-validation.scenarios.spec.ts`에 계산기 시나리오(통과, stdout 불일치, unsupported operator, 런타임 ERROR)와 `DefaultRealtimeTurnSubmitService` publish 경로 검증을 추가했습니다.
+
+**Files changed:**
+- `src/modules/mission-results/build-turn-evaluation-result-payload.ts`
+- `src/modules/mission-results/build-turn-evaluation-result-payload.spec.ts`
+- `src/modules/mission-results/service/mission-results.service.ts`
+- `src/modules/turns/judge/step-public-case-judge.ts`
+- `src/modules/turns/judge/step-public-case-judge.spec.ts`
+- `src/modules/turns/service/turns.service.ts`
+- `src/modules/turns/service/turns.service.spec.ts`
+- `src/test/scenarios/spec-validation.scenarios.spec.ts`
+
+**Verification:**
+- [x] `pnpm test -- src/modules/turns/judge/step-public-case-judge.spec.ts src/modules/mission-results/build-turn-evaluation-result-payload.spec.ts src/modules/turns/service/turns.service.spec.ts src/test/scenarios/spec-validation.scenarios.spec.ts`
+- [x] `pnpm typecheck`
+- [x] `pnpm build`
+- [x] Subagent review 1회 — public-case `ERROR` per-case 메시지에 `runtimeFailureMessage` 반영 후 추가 피드백 없음
+
+**Commit:**
+- `975d61c` feat(turns): 계산기 스트라이크·미션결과·시나리오 연동
+
+**Impact on next tasks:**
+- `docs/plans/calculator-mission-template-runtime-judging-plan.md` Phase 3(Tasks 5–6) 및 Complete 체크포인트 기준으로 계산기 미션은 seed → 컨테이너 준비 → stdin 실행 → 공개 케이스 판정 → 스트라이크·미션 종료까지 backend 단위·시나리오 검증이 갖춰졌습니다.
+- 이후 작업은 DB-backed 통합·실제 Docker runner·프론트 계약 연동에 집중할 수 있으며, 판정·실행 경계(`TurnsService` / judge helper vs `integrations/runtime`)는 유지해야 합니다.
+
+**Design decisions made:**
+- turn evaluation payload builder를 mission-results 모듈로 분리해 `TurnsService` orchestration과 클라이언트-facing 결과 shape를 나눴습니다.
+- `detectedIssues`는 공개 케이스가 있을 때 실패·오류 케이스마다 한 항목씩 내려 전체 스텝 시도를 설명 가능하게 했습니다.
+- `ERROR` 판정은 gameplay spec과 C4 handoff대로 스트라이크·다음 턴 생성 없이 명시적으로 유지했습니다.
+
+**Deviations from spec:**
+- None intended. `mission-result`는 미션 종료 시에만 realtime으로 방출되며, 스텝 단위 결과는 `turn-evaluated.evaluationResult`에 담깁니다.
+
+**Trade-offs:**
+- 시나리오 검증은 mocked repository·service 수준이며, 실제 Postgres·소켓·Docker 통합은 후속 검증이 필요합니다.
+- 케이스별 `docker exec` 반복 실행 구조는 Task 5와 동일하게 유지됩니다.
+
+**Open questions:**
+- [x] Should public-case `ERROR` `detectedIssues.message` include only a generic label? → No. Use `runtimeFailureMessage`, then `stderr`, then fallback.
+- [x] Should `stepOrder` in evaluation payload reflect the post-pass next step? → No. Use `judgedStep` captured before step transition.
+
+**Open risks or follow-ups:**
+- CI 또는 개발 환경에서 시드된 계산기 미션으로 실제 컨테이너 실행 end-to-end 스모크가 아직 없습니다.
+- `docker_image_deployments` 및 추가 미션 타입은 본 계획 범위 밖입니다.
+
+**Instructions for the next worker:**
+- 계산기 슬라이스 후속 작업 시 `TurnsService`, `step-public-case-judge`, `build-turn-evaluation-result-payload`를 함께 읽고 판정·페이로드·스트라이크 규칙을 한 단위로 취급하세요.
+- `ERROR` 경로에 `recordFailedAttempt()` 또는 next-turn 생성을 넣지 마세요.
+- 실시간 이벤트 순서 변경 시 `DefaultRealtimeTurnSubmitService`와 `spec-validation.scenarios.spec.ts`를 함께 갱신하세요.
