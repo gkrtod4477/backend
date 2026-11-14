@@ -12,7 +12,7 @@ Goal: add deferred (not wired) feature code over 7 days so GitHub Insights shows
 ## Plan
 | Day | Feature | Folder | Status |
 |---|---|---|---|
-| 1 | Game replay timeline builder | `src/deferred/replay` | in progress |
+| 1 | Game replay timeline builder | `src/deferred/replay` | done 2026-11-14 |
 | 2 | Score and rating calculator | `src/deferred/ranking` | pending |
 | 3 | Profile statistics aggregator | `src/deferred/profile-stats` | pending |
 | 4 | Achievement rule engine | `src/deferred/achievements` | pending |
@@ -21,7 +21,9 @@ Goal: add deferred (not wired) feature code over 7 days so GitHub Insights shows
 | 7 | Reconnection session recovery helper | `src/deferred/reconnection` | pending |
 
 ## Log
-- Additions so far: 0
+- 2026-11-14 Day 1: replay, 721 code lines (Sonnet). Verified typecheck, eslint src/deferred, no outside imports. No runtime tests by design.
+- Additions so far: ~765 (docs 44 + code 721). Remaining budget: 4235–4735 over Days 2–7 (~720 code lines/day).
+- When adding a feature, also add its row to `src/deferred/README.md` (orchestrator, docs commit).
 
 ## Next
-- Day 1
+- Day 2: ranking (score and rating calculator), brief like Day 1, target 700–740 lines.
