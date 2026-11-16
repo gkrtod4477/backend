@@ -9,3 +9,4 @@ Each subfolder is a candidate feature kept for later review. To adopt one, revie
 | Folder | Feature |
 | --- | --- |
 | `replay/` | Game replay timeline builder |
+| `ranking/` | Score and rating calculator |

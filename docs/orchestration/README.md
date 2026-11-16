@@ -13,7 +13,7 @@ Goal: add deferred (not wired) feature code over 7 days so GitHub Insights shows
 | Day | Feature | Folder | Status |
 |---|---|---|---|
 | 1 | Game replay timeline builder | `src/deferred/replay` | done 2026-11-14 |
-| 2 | Score and rating calculator | `src/deferred/ranking` | pending |
+| 2 | Score and rating calculator | `src/deferred/ranking` | done 2026-11-16 |
 | 3 | Profile statistics aggregator | `src/deferred/profile-stats` | pending |
 | 4 | Achievement rule engine | `src/deferred/achievements` | pending |
 | 5 | WebSocket / submission rate limiter | `src/deferred/rate-limit` | pending |
@@ -22,8 +22,9 @@ Goal: add deferred (not wired) feature code over 7 days so GitHub Insights shows
 
 ## Log
 - 2026-11-14 Day 1: replay, 721 code lines (Sonnet). Verified typecheck, eslint src/deferred, no outside imports. No runtime tests by design.
-- Additions so far: ~765 (docs 44 + code 721). Remaining budget: 4235–4735 over Days 2–7 (~720 code lines/day).
+- 2026-11-16 Day 2: ranking, 728 code lines (Sonnet). Same checks passed. Assumed `HintUsageInput` (no hint entity exists).
+- Additions so far: measure with `git diff --shortstat 8187c8e HEAD`. Target total 5000–5500 after Day 7 (~720 code lines/day).
 - When adding a feature, also add its row to `src/deferred/README.md` (orchestrator, docs commit).
 
 ## Next
-- Day 2: ranking (score and rating calculator), brief like Day 1, target 700–740 lines.
+- Day 3: profile-stats, brief like Day 2, target 700–740 lines.
